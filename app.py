@@ -77,20 +77,20 @@ def load_market_data(start, end):
     df['SOXX_RSI'] = calculate_rsi(df['SOXX_Close'], period=2)
     return df.dropna().copy()
 
-# --- 데이터프레임 스타일링 함수 ---
+# --- 데이터프레임 스타일링 함수 (Tab 1 용) ---
 def bg_color_sections(col):
-    # 어두운 주황색 구역으로 지정할 열 이름들
+    no_color_cols = ["진행도", "거래일", "SOXL 종가"]
     orange_cols = [
         "RSI 수량", "RSI 평단", "RSI 매도일", "RSI 수익금", "RSI 손익률", 
         "실현손익", "평가손익", "누적 실현 손익", "자산 손익률 (%)", 
         "입출금"
     ]
     
-    if col.name in orange_cols:
-        # 살짝 어두운 주황색 (투명도 조절로 글씨가 잘 보이게 세팅)
+    if col.name in no_color_cols:
+        return [''] * len(col)
+    elif col.name in orange_cols:
         return ['background-color: rgba(255, 152, 0, 0.15)'] * len(col)
     else:
-        # 나머지 구역은 모두 노란색
         return ['background-color: rgba(255, 235, 59, 0.15)'] * len(col)
 
 def color_profit(val):
@@ -99,17 +99,25 @@ def color_profit(val):
     try:
         num = float(str(val).replace('%', '').replace(',', ''))
         if num > 0:
-            return 'color: #E74C3C; font-weight: bold;' # 빨간색
+            return 'color: #E74C3C; font-weight: bold;'
         elif num < 0:
-            return 'color: #3498DB; font-weight: bold;' # 파란색
+            return 'color: #3498DB; font-weight: bold;'
     except:
         pass
     return ''
 
 def highlight_progress(val):
     if val == 0:
-        return 'background-color: #A9DFBF; color: black; font-weight: bold;' # 민트색 배경
+        return 'background-color: #A9DFBF; color: black; font-weight: bold;'
     return ''
+
+# --- 데이터프레임 스타일링 함수 (Tab 2 용) ---
+def style_order_table(row):
+    if '매수' in str(row['구분 (매수/매도)']):
+        return ['background-color: rgba(231, 76, 60, 0.2)'] * len(row)
+    elif '매도' in str(row['구분 (매수/매도)']):
+        return ['background-color: rgba(52, 152, 219, 0.2)'] * len(row)
+    return [''] * len(row)
 
 # --- 메인 실행 로직 ---
 if run_button:
@@ -211,7 +219,6 @@ if run_button:
                     if sell_main:
                         exec_price = curr_soxl * (1 - SLIPPAGE)
                         sell_amount = main_shares * exec_price
-                        
                         profit = sell_amount - main_cycle_invested
                         profit_rate = (profit / main_cycle_invested * 100) if main_cycle_invested > 0 else 0
                         
@@ -231,7 +238,6 @@ if run_button:
                     if sell_rsi:
                         exec_price = curr_soxl * (1 - SLIPPAGE)
                         sell_amount = rsi_shares * exec_price
-                        
                         profit = sell_amount - rsi_invested
                         profit_rate = (profit / rsi_invested * 100) if rsi_invested > 0 else 0
                         
@@ -298,7 +304,6 @@ if run_button:
                                 if rsi_buy_count == 1: rsi_holding_days = 0
 
                     final_equity = cash + (main_shares + rsi_shares) * curr_soxl
-                    
                     current_progress = 0 if main_shares == 0 else main_add_buy_count + 1
                     cum_realized += today_realized_profit
                     disp_realized = round(today_realized_profit, 2) if (today_main_sell_date or today_rsi_sell_date) else ""
@@ -329,19 +334,16 @@ if run_button:
                         "진행도": current_progress,
                         "거래일": date_str,
                         "SOXL 종가": round(curr_soxl, 2),
-                        
                         "Main 수량": main_shares,
                         "Main 평단": round(main_avg_price, 2) if main_avg_price > 0 else "",
                         "Main 매도일": today_main_sell_date,
                         "Main 수익금": today_main_profit,
                         "Main 손익률": today_main_profit_rate,
-                        
                         "RSI 수량": rsi_shares,
                         "RSI 평단": round(rsi_avg_price, 2) if rsi_avg_price > 0 else "",
                         "RSI 매도일": today_rsi_sell_date,
                         "RSI 수익금": today_rsi_profit,
                         "RSI 손익률": today_rsi_profit_rate,
-                        
                         "실현손익": disp_realized,
                         "평가손익": round(unrealized, 2),
                         "누적 실현 손익": round(cum_realized, 2),
@@ -355,7 +357,6 @@ if run_button:
                         "진행일": main_holding_days,
                         "YDD (%)": round(current_ydd, 2),
                         "현금 비중 (%)": f"{cash_ratio:.2f}%",
-                        
                         "입출금": round(flow_today, 0) if flow_today != 0 else "",
                         "예수금(Cash)": round(cash, 2),
                         "총 자산(Equity)": round(final_equity, 2)
@@ -366,58 +367,170 @@ if run_button:
                 else:
                     df_records = pd.DataFrame(daily_records)
                     
-                    final_asset = df_records.iloc[-1]['총 자산(Equity)']
-                    final_cash = df_records.iloc[-1]['예수금(Cash)']
-                    years = len(df_records) / 252 if len(df_records) > 252 else max(len(df_records) / 252, 0.1)
+                    # 탭 분리
+                    tab1, tab2 = st.tabs(["📊 백테스트 및 누적 매매 일지", "🛒 오늘의 실전 LOC 매매표"])
                     
-                    cagr = ((final_asset / total_net_investment) ** (1/years) - 1) * 100 if years > 0 and total_net_investment > 0 else 0
-                    mdd = df_records['DD (%)'].min()
-                    win_rate = (win_count_main / trade_count_main * 100) if trade_count_main > 0 else 0
-                    
-                    st.success("✅ 실전 매매 기록장 업데이트 완료!")
-                    
-                    st.subheader("📊 2. 현재 계좌 요약 (핵심 보드)")
-                    c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("최종 총 자산", f"${final_asset:,.0f}")
-                    c2.metric("보유 예수금 (현금)", f"${final_cash:,.0f}")
-                    c3.metric("순 투자 원금", f"${total_net_investment:,.0f}")
-                    c4.metric("Main 승률", f"{win_rate:.1f}%")
-                    
-                    c5, c6, c7, c8 = st.columns(4)
-                    c5.metric("추정 CAGR", f"{cagr:.2f}%")
-                    c6.metric("최대 낙폭 (MDD)", f"{mdd:.2f}%")
-                    c7.metric("현재 위치 (DD)", f"{df_records.iloc[-1]['DD (%)']:.2f}%")
-                    c8.metric("총 매매 횟수", f"{trade_count_main + trade_count_rsi}회")
+                    # ----------------------------------------
+                    # [Tab 1] 기존 백테스트 및 누적 일지
+                    # ----------------------------------------
+                    with tab1:
+                        final_asset = df_records.iloc[-1]['총 자산(Equity)']
+                        final_cash = df_records.iloc[-1]['예수금(Cash)']
+                        years = len(df_records) / 252 if len(df_records) > 252 else max(len(df_records) / 252, 0.1)
+                        cagr = ((final_asset / total_net_investment) ** (1/years) - 1) * 100 if years > 0 and total_net_investment > 0 else 0
+                        mdd = df_records['DD (%)'].min()
+                        win_rate = (win_count_main / trade_count_main * 100) if trade_count_main > 0 else 0
+                        
+                        st.subheader("2. 현재 계좌 요약 (핵심 보드)")
+                        c1, c2, c3, c4 = st.columns(4)
+                        c1.metric("최종 총 자산", f"${final_asset:,.0f}")
+                        c2.metric("보유 예수금 (현금)", f"${final_cash:,.0f}")
+                        c3.metric("순 투자 원금", f"${total_net_investment:,.0f}")
+                        c4.metric("Main 승률", f"{win_rate:.1f}%")
+                        
+                        c5, c6, c7, c8 = st.columns(4)
+                        c5.metric("추정 CAGR", f"{cagr:.2f}%")
+                        c6.metric("최대 낙폭 (MDD)", f"{mdd:.2f}%")
+                        c7.metric("현재 위치 (DD)", f"{df_records.iloc[-1]['DD (%)']:.2f}%")
+                        c8.metric("총 매매 횟수", f"{trade_count_main + trade_count_rsi}회")
 
-                    st.subheader("📋 3. 일자별 상세 매매 일지 (최신순)")
-                    
-                    df_records_reversed = df_records.sort_values(by="거래일", ascending=False).reset_index(drop=True)
-                    
-                    ordered_columns = [
-                        "진행도", "거래일", "SOXL 종가", 
-                        "Main 수량", "Main 평단", "Main 매도일", "Main 수익금", "Main 손익률", 
-                        "RSI 수량", "RSI 평단", "RSI 매도일", "RSI 수익금", "RSI 손익률", 
-                        "실현손익", "평가손익", "누적 실현 손익", "자산 손익률 (%)", 
-                        "DD (%)", "초기 매수금", "1회 매수금", "2회 매수금", "RSI 매수금", 
-                        "투자 기준액", "진행일", "YDD (%)", "현금 비중 (%)",
-                        "입출금", "예수금(Cash)", "총 자산(Equity)"
-                    ]
-                    
-                    df_records_reversed = df_records_reversed[ordered_columns]
-                    
-                    # 배경색 함수와 수익/손실 글씨색 함수를 적용 (순서 중요)
-                    styled_df = df_records_reversed.style\
-                        .apply(bg_color_sections, axis=0)\
-                        .map(highlight_progress, subset=['진행도'])\
-                        .map(color_profit, subset=[
-                            'Main 수익금', 'Main 손익률', 'RSI 수익금', 'RSI 손익률', 
-                            '실현손익', '평가손익', '누적 실현 손익', '자산 손익률 (%)'
-                        ])
-                    
-                    st.dataframe(
-                        styled_df,
-                        use_container_width=True,
-                        height=500,
-                        hide_index=True,
-                        column_order=ordered_columns
-                    )
+                        st.subheader("3. 일자별 상세 매매 일지 (최신순)")
+                        df_records_reversed = df_records.sort_values(by="거래일", ascending=False).reset_index(drop=True)
+                        ordered_columns = [
+                            "진행도", "거래일", "SOXL 종가", 
+                            "Main 수량", "Main 평단", "Main 매도일", "Main 수익금", "Main 손익률", 
+                            "RSI 수량", "RSI 평단", "RSI 매도일", "RSI 수익금", "RSI 손익률", 
+                            "실현손익", "평가손익", "누적 실현 손익", "자산 손익률 (%)", 
+                            "DD (%)", "초기 매수금", "1회 매수금", "2회 매수금", "RSI 매수금", 
+                            "투자 기준액", "진행일", "YDD (%)", "현금 비중 (%)",
+                            "입출금", "예수금(Cash)", "총 자산(Equity)"
+                        ]
+                        df_records_reversed = df_records_reversed[ordered_columns]
+                        
+                        styled_df = df_records_reversed.style\
+                            .apply(bg_color_sections, axis=0)\
+                            .map(highlight_progress, subset=['진행도'])\
+                            .map(color_profit, subset=[
+                                'Main 수익금', 'Main 손익률', 'RSI 수익금', 'RSI 손익률', 
+                                '실현손익', '평가손익', '누적 실현 손익', '자산 손익률 (%)'
+                            ])
+                        
+                        st.dataframe(styled_df, use_container_width=True, height=500, hide_index=True, column_order=ordered_columns)
+
+                    # ----------------------------------------
+                    # [Tab 2] 실전 LOC 주문표
+                    # ----------------------------------------
+                    with tab2:
+                        st.subheader("🚨 오늘 밤 미국 장 LOC 주문표")
+                        
+                        # 마지막 날짜 데이터 추출 (주문 기준 데이터)
+                        last_row = df_records.iloc[-1]
+                        last_close = float(last_row['SOXL 종가'])
+                        last_rsi = float(df['SOXX_RSI'].iloc[-1])
+                        current_cash = float(last_row['예수금(Cash)'])
+                        
+                        # A. 현재 계좌 상태 요약 (우측 상단 블록 모방)
+                        st.markdown(f"**기준일(마지막 장 마감):** {last_row['거래일']} | **전일 종가:** ${last_close:.2f} | **SOXX RSI:** {last_rsi:.2f}")
+                        
+                        col_acc1, col_acc2, col_acc3 = st.columns(3)
+                        col_acc1.metric("최종 매수가 (평단)", f"${last_row['Main 평단']}" if last_row['Main 평단'] != "" else "$0.00")
+                        col_acc2.metric("보유 수량", f"{last_row['Main 수량']} 주")
+                        col_acc3.metric("진행 일수 (MOC 24일)", f"{last_row['진행일']} 일")
+
+                        # B. 통합 주문 상세 표 구성
+                        order_list = []
+                        buy_summary = []
+                        sell_summary = []
+                        
+                        # 1) Main 매도 계산
+                        if main_shares > 0:
+                            if main_add_buy_count >= C_LIMIT:
+                                sell_price = last_close * (1 + EXH_TP)
+                            else:
+                                sell_price = main_last_buy_close * (1 + TP_RATE)
+                            
+                            order_list.append({
+                                '구분 (매수/매도)': '매도 (Main)', '거래방법': 'LOC', 
+                                '가격 ($)': round(sell_price, 2), '수량 (주)': main_shares
+                            })
+                            sell_summary.append((round(sell_price, 2), main_shares))
+                        
+                        # 2) Main 매수 계산
+                        if main_shares == 0:
+                            # 신규 진입 대기 상태
+                            buy_price = last_close * 1.05
+                            buy_qty = math.floor(disp_init / buy_price) if buy_price > 0 else 0
+                            if buy_qty > 0:
+                                order_list.append({
+                                    '구분 (매수/매도)': '매수 (Main 신규)', '거래방법': 'LOC (이하)', 
+                                    '가격 ($)': round(buy_price, 2), '수량 (주)': buy_qty
+                                })
+                                buy_summary.append((round(buy_price, 2), buy_qty))
+                        else:
+                            # 추가 매수 진행 중 (C_LIMIT 미만일 때)
+                            if main_add_buy_count < C_LIMIT:
+                                buy_price_1 = last_close * (1 - DROP_BUY_RATE_1)
+                                buy_price_2 = last_close * (1 - DROP_BUY_RATE_2)
+                                
+                                tgt_amt = main_cycle_invested * K_FRAC
+                                qty_1 = math.floor(tgt_amt / buy_price_1) if buy_price_1 > 0 else 0
+                                qty_2 = math.floor(tgt_amt / buy_price_2) if buy_price_2 > 0 else 0
+                                
+                                if qty_1 > 0:
+                                    order_list.append({
+                                        '구분 (매수/매도)': '매수 (Main 1차)', '거래방법': 'LOC', 
+                                        '가격 ($)': round(buy_price_1, 2), '수량 (주)': qty_1
+                                    })
+                                    buy_summary.append((round(buy_price_1, 2), qty_1))
+                                if qty_2 > 0:
+                                    order_list.append({
+                                        '구분 (매수/매도)': '매수 (Main 2차)', '거래방법': 'LOC', 
+                                        '가격 ($)': round(buy_price_2, 2), '수량 (주)': qty_2
+                                    })
+                                    buy_summary.append((round(buy_price_2, 2), qty_2))
+
+                        # 3) RSI 매매 계산
+                        if rsi_shares > 0:
+                            order_list.append({
+                                '구분 (매수/매도)': '매도 (RSI 대기)', '거래방법': '조건부', 
+                                '가격 ($)': 'RSI 25 도달시', '수량 (주)': rsi_shares
+                            })
+                        elif rsi_shares == 0 and last_rsi <= 22 and rsi_buy_count < 2:
+                            rsi_buy_price = last_close * 1.05 # 진입 기준 러프하게 잡음
+                            rsi_target = active_rsi_budget / 2 if active_rsi_budget > 0 else latest_rsi_budget / 2
+                            rsi_qty = math.floor(rsi_target / rsi_buy_price) if rsi_buy_price > 0 else 0
+                            if rsi_qty > 0:
+                                order_list.append({
+                                    '구분 (매수/매도)': '매수 (RSI 신규)', '거래방법': '조건부 (LOC)', 
+                                    '가격 ($)': round(rsi_buy_price, 2), '수량 (주)': rsi_qty
+                                })
+                                buy_summary.append((round(rsi_buy_price, 2), rsi_qty))
+
+                        st.markdown("---")
+                        col_table, col_summary = st.columns([1.5, 1])
+                        
+                        with col_table:
+                            st.markdown("##### 📝 통합 주문 상세 표")
+                            if order_list:
+                                df_orders = pd.DataFrame(order_list)
+                                styled_orders = df_orders.style.apply(style_order_table, axis=1)
+                                st.dataframe(styled_orders, use_container_width=True, hide_index=True)
+                            else:
+                                st.info("오늘 밤은 대기(관망) 상태입니다. 예약할 주문이 없습니다.")
+
+                        with col_summary:
+                            st.markdown("##### 🎯 증권사 입력용 최종 요약")
+                            
+                            st.markdown("**[ 원 매수 주문 ]**")
+                            if buy_summary:
+                                for p, q in buy_summary:
+                                    st.write(f"💵 **${p:.2f}** | 🛒 **{q} 주**")
+                            else:
+                                st.write("- 매수 주문 없음")
+                                
+                            st.markdown("**[ 원 매도 주문 ]**")
+                            if sell_summary:
+                                for p, q in sell_summary:
+                                    st.write(f"💵 **${p:.2f}** | 🛒 **{q} 주**")
+                            else:
+                                st.write("- 매도 주문 없음")
