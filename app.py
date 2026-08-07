@@ -132,10 +132,18 @@ if run_button:
                 main_holding_days, main_add_buy_count = 0, 0
                 
                 rsi_shares, rsi_invested, rsi_buy_count, rsi_holding_days = 0, 0.0, 0, 0
-                latest_rsi_budget, active_rsi_budget = 0.0, 0.0
+                
+                # 추가 트래킹 변수 (YDD, 누적수익, 투자기준액 등)
+                cum_realized = 0.0
+                cycle_base_equity = INIT_CASH
+                cycle_initial_buy_amt = INIT_CASH * X_FRAC
+                latest_rsi_budget = INIT_CASH * RSI_FRAC
+                active_rsi_budget = 0.0
+                
+                current_year = -1
+                year_max_equity = INIT_CASH
                 
                 trade_count_main, win_count_main, trade_count_rsi = 0, 0, 0
-                
                 daily_records = []
                 max_equity = INIT_CASH
 
@@ -159,11 +167,19 @@ if run_button:
                     total_equity = cash + (main_shares + rsi_shares) * curr_soxl
                     if total_equity > max_equity: max_equity = total_equity
                     current_dd = ((total_equity / max_equity) - 1) * 100
+                    
+                    # YDD 계산 (연도 변경 시 고점 리셋)
+                    if current_date.year != current_year:
+                        current_year = current_date.year
+                        year_max_equity = total_equity
+                    if total_equity > year_max_equity:
+                        year_max_equity = total_equity
+                    current_ydd = ((total_equity / year_max_equity) - 1) * 100
 
                     sell_main, sell_rsi = False, False
-                    
                     today_main_sell_date, today_main_profit, today_main_profit_rate = "", "", ""
                     today_rsi_sell_date, today_rsi_profit, today_rsi_profit_rate = "", "", ""
+                    today_realized_profit = 0.0
 
                     # [A] 매도 판별
                     if main_shares > 0:
@@ -192,6 +208,7 @@ if run_button:
                         today_main_sell_date = date_str
                         today_main_profit = round(profit, 2)
                         today_main_profit_rate = f"{profit_rate:.2f}%"
+                        today_realized_profit += profit
                         
                         cash += sell_amount
                         trade_count_main += 1
@@ -211,20 +228,23 @@ if run_button:
                         today_rsi_sell_date = date_str
                         today_rsi_profit = round(profit, 2)
                         today_rsi_profit_rate = f"{profit_rate:.2f}%"
+                        today_realized_profit += profit
                         
                         cash += sell_amount
                         trade_count_rsi += 1
-                        
                         rsi_shares, rsi_invested, rsi_buy_count, rsi_holding_days = 0, 0.0, 0, 0
 
                     # [B] 매수 판별 및 실행
                     if not sell_main:
                         if main_shares == 0:
                             if curr_soxl <= prev_soxl * 1.05:
+                                # 새로운 사이클 시작 시 기준금액 확정
+                                cycle_base_equity = total_equity
                                 latest_rsi_budget = total_equity * RSI_FRAC
-                                target_main_amt = total_equity * X_FRAC
+                                cycle_initial_buy_amt = total_equity * X_FRAC
+                                
                                 ep = curr_soxl * (1 + SLIPPAGE)
-                                buy_qty = round(target_main_amt / ep)
+                                buy_qty = round(cycle_initial_buy_amt / ep)
                                 if buy_qty * ep > cash: buy_qty = math.floor(cash / ep)
 
                                 if buy_qty > 0:
@@ -269,14 +289,42 @@ if run_button:
                                 rsi_buy_count += 1
                                 if rsi_buy_count == 1: rsi_holding_days = 0
 
+                    # ----------------------------------------------------
+                    # 매일 계산되어야 하는 핵심 지표들
+                    # ----------------------------------------------------
                     final_equity = cash + (main_shares + rsi_shares) * curr_soxl
+                    
+                    # 진행도
+                    current_progress = 0 if main_shares == 0 else main_add_buy_count + 1
+                    
+                    # 누적 실현 손익
+                    cum_realized += today_realized_profit
+                    disp_realized = round(today_realized_profit, 2) if (today_main_sell_date or today_rsi_sell_date) else ""
+                    
+                    # 평가손익
+                    unrealized = 0.0
+                    if main_shares > 0: unrealized += (main_shares * curr_soxl) - main_cycle_invested
+                    if rsi_shares > 0: unrealized += (rsi_shares * curr_soxl) - rsi_invested
+                    
+                    # 자산 손익률 및 현금 비중
+                    asset_return = ((final_equity / total_net_investment) - 1) * 100 if total_net_investment > 0 else 0
+                    cash_ratio = (cash / final_equity) * 100 if final_equity > 0 else 0
+                    
+                    # 사이클별 예상 매수금 산출 (진행 중이면 고정값, 대기 중이면 실시간 평가액 기준)
+                    if main_shares == 0:
+                        disp_base = final_equity
+                        disp_init = final_equity * X_FRAC
+                        disp_rsi = final_equity * RSI_FRAC
+                    else:
+                        disp_base = cycle_base_equity
+                        disp_init = cycle_initial_buy_amt
+                        disp_rsi = latest_rsi_budget
+                        
+                    disp_1st = disp_init * K_FRAC
+                    disp_2nd = (disp_init + disp_1st) * K_FRAC
+                    
                     main_avg_price = (main_cycle_invested / main_shares) if main_shares > 0 else 0
                     rsi_avg_price = (rsi_invested / rsi_shares) if rsi_shares > 0 else 0
-                    
-                    if main_shares == 0:
-                        current_progress = 0
-                    else:
-                        current_progress = main_add_buy_count + 1
                     
                     daily_records.append({
                         "진행도": current_progress,
@@ -295,8 +343,23 @@ if run_button:
                         "RSI 수익금": today_rsi_profit,
                         "RSI 손익률": today_rsi_profit_rate,
                         
+                        # 요청하신 신규 13개 열
+                        "실현손익": disp_realized,
+                        "평가손익": round(unrealized, 2),
+                        "누적 실현 손익": round(cum_realized, 2),
+                        "자산 손익률 (%)": f"{asset_return:.2f}%",
+                        "DD (%)": round(current_dd, 2),
+                        "초기 매수금": round(disp_init, 2),
+                        "1회 매수금": round(disp_1st, 2),
+                        "2회 매수금": round(disp_2nd, 2),
+                        "RSI 매수금": round(disp_rsi, 2),
+                        "투자 기준액": round(disp_base, 2),
+                        "진행일": main_holding_days,
+                        "YDD (%)": round(current_ydd, 2),
+                        "현금 비중 (%)": f"{cash_ratio:.2f}%",
+                        
+                        # 기존 항목 (후면 배치)
                         "입출금": round(flow_today, 0) if flow_today != 0 else "",
-                        "현재 DD (%)": round(current_dd, 2),
                         "예수금(Cash)": round(cash, 2),
                         "총 자산(Equity)": round(final_equity, 2)
                     })
@@ -311,7 +374,7 @@ if run_button:
                     years = len(df_records) / 252 if len(df_records) > 252 else max(len(df_records) / 252, 0.1)
                     
                     cagr = ((final_asset / total_net_investment) ** (1/years) - 1) * 100 if years > 0 and total_net_investment > 0 else 0
-                    mdd = df_records['현재 DD (%)'].min()
+                    mdd = df_records['DD (%)'].min()
                     win_rate = (win_count_main / trade_count_main * 100) if trade_count_main > 0 else 0
                     
                     st.success("✅ 실전 매매 기록장 업데이트 완료!")
@@ -326,28 +389,33 @@ if run_button:
                     c5, c6, c7, c8 = st.columns(4)
                     c5.metric("추정 CAGR", f"{cagr:.2f}%")
                     c6.metric("최대 낙폭 (MDD)", f"{mdd:.2f}%")
-                    c7.metric("현재 위치 (DD)", f"{df_records.iloc[-1]['현재 DD (%)']:.2f}%")
+                    c7.metric("현재 위치 (DD)", f"{df_records.iloc[-1]['DD (%)']:.2f}%")
                     c8.metric("총 매매 횟수", f"{trade_count_main + trade_count_rsi}회")
 
                     st.subheader("📋 3. 일자별 상세 매매 일지 (최신순)")
                     
                     df_records_reversed = df_records.sort_values(by="거래일", ascending=False).reset_index(drop=True)
                     
-                    # 새로운 열 순서 적용
+                    # 완벽하게 요청하신 순서대로 열 재배치
                     ordered_columns = [
                         "진행도", "거래일", "SOXL 종가", 
                         "Main 수량", "Main 평단", "Main 매도일", "Main 수익금", "Main 손익률", 
                         "RSI 수량", "RSI 평단", "RSI 매도일", "RSI 수익금", "RSI 손익률", 
-                        "입출금", "현재 DD (%)", "예수금(Cash)", "총 자산(Equity)"
+                        "실현손익", "평가손익", "누적 실현 손익", "자산 손익률 (%)", 
+                        "DD (%)", "초기 매수금", "1회 매수금", "2회 매수금", "RSI 매수금", 
+                        "투자 기준액", "진행일", "YDD (%)", "현금 비중 (%)",
+                        "입출금", "예수금(Cash)", "총 자산(Equity)"
                     ]
                     df_records_reversed = df_records_reversed[ordered_columns]
                     
-                    # Pandas Styler 적용
+                    # 수익/손실 색상 하이라이팅 적용
                     styled_df = df_records_reversed.style\
                         .map(highlight_progress, subset=['진행도'])\
-                        .map(color_profit, subset=['Main 수익금', 'Main 손익률', 'RSI 수익금', 'RSI 손익률'])
+                        .map(color_profit, subset=[
+                            'Main 수익금', 'Main 손익률', 'RSI 수익금', 'RSI 손익률', 
+                            '실현손익', '평가손익', '누적 실현 손익', '자산 손익률 (%)'
+                        ])
                     
-                    # hide_index=True 로 지저분한 기본 인덱스 숨김 처리
                     st.dataframe(
                         styled_df,
                         use_container_width=True,
