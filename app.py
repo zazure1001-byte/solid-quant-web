@@ -16,7 +16,8 @@ with st.expander("⚙️ 파라미터 설정 (터치하여 열기/닫기)", expa
     with col1:
         x_input = st.number_input("초기 진입 비중 (X) %", min_value=5.0, max_value=100.0, value=35.0, step=0.1)
         k_input = st.number_input("추가 매수 비율 (K) %", min_value=1.0, max_value=50.0, value=12.5, step=0.1)
-        c_input = st.number_input("최대 추가매수 횟수 (C)", min_value=1, max_value=10, value=7, step=1)
+        c_input = st.number_input("최대 매수 횟수 (C)", min_value=1, max_value=10, value=7, step=1)
+        slippage_input = st.number_input("슬리피지 (%)", min_value=0.0, max_value=5.0, value=0.0, step=0.01)
     with col2:
         exh_tp_input = st.number_input("소진시 익절 목표 %", min_value=1.0, max_value=20.0, value=3.0, step=0.5)
         start_date = st.date_input("백테스트 시작일", date(2015, 1, 1))
@@ -68,7 +69,7 @@ if run_button:
             MAX_HOLD_DAYS = 24
             DROP_BUY_RATE_1 = 0.010
             DROP_BUY_RATE_2 = 0.100
-            SLIPPAGE = 0.00
+            SLIPPAGE = slippage_input / 100.0  # 입력받은 슬리피지 적용
             RSI_FRAC = 0.30
             
             X_FRAC = x_input / 100.0
