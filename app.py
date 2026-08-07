@@ -78,22 +78,37 @@ def load_market_data(start, end):
     return df.dropna().copy()
 
 # --- 데이터프레임 스타일링 함수 ---
+def bg_color_sections(col):
+    # 어두운 주황색 구역으로 지정할 열 이름들
+    orange_cols = [
+        "RSI 수량", "RSI 평단", "RSI 매도일", "RSI 수익금", "RSI 손익률", 
+        "실현손익", "평가손익", "누적 실현 손익", "자산 손익률 (%)", 
+        "입출금"
+    ]
+    
+    if col.name in orange_cols:
+        # 살짝 어두운 주황색 (투명도 조절로 글씨가 잘 보이게 세팅)
+        return ['background-color: rgba(255, 152, 0, 0.15)'] * len(col)
+    else:
+        # 나머지 구역은 모두 노란색
+        return ['background-color: rgba(255, 235, 59, 0.15)'] * len(col)
+
 def color_profit(val):
     if val == "":
         return ""
     try:
         num = float(str(val).replace('%', '').replace(',', ''))
         if num > 0:
-            return 'color: #E74C3C;' # 빨간색
+            return 'color: #E74C3C; font-weight: bold;' # 빨간색
         elif num < 0:
-            return 'color: #3498DB;' # 파란색
+            return 'color: #3498DB; font-weight: bold;' # 파란색
     except:
         pass
     return ''
 
 def highlight_progress(val):
     if val == 0:
-        return 'background-color: #A9DFBF; color: black;' # 민트색 배경
+        return 'background-color: #A9DFBF; color: black; font-weight: bold;' # 민트색 배경
     return ''
 
 # --- 메인 실행 로직 ---
@@ -108,7 +123,6 @@ if run_button:
             if trade_start_idx >= len(df):
                 st.error("선택한 시작일에 해당하는 시장 데이터가 없습니다. 조금 더 과거 날짜를 포함하거나 휴일 여부를 확인해주세요.")
             else:
-                # --- 내부 고정 파라미터 ---
                 X_FRAC = 0.35      
                 K_FRAC = 0.125     
                 C_LIMIT = 7        
@@ -391,14 +405,15 @@ if run_button:
                     
                     df_records_reversed = df_records_reversed[ordered_columns]
                     
+                    # 배경색 함수와 수익/손실 글씨색 함수를 적용 (순서 중요)
                     styled_df = df_records_reversed.style\
+                        .apply(bg_color_sections, axis=0)\
                         .map(highlight_progress, subset=['진행도'])\
                         .map(color_profit, subset=[
                             'Main 수익금', 'Main 손익률', 'RSI 수익금', 'RSI 손익률', 
                             '실현손익', '평가손익', '누적 실현 손익', '자산 손익률 (%)'
                         ])
                     
-                    # column_order=ordered_columns 를 사용하여 열 순서 강제 고정
                     st.dataframe(
                         styled_df,
                         use_container_width=True,
