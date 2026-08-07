@@ -46,15 +46,16 @@ with st.expander("📝 1. 기본 설정 및 입출금 기록 (터치하여 열�
 
 run_button = st.button("🚀 매매표 생성 및 백테스트 실행", type="primary", use_container_width=True)
 
-# --- 보조지표 계산 함수 ---
-def calculate_rsi(series, period=2):
+# --- 보조지표 계산 함수 (Wilder's RSI 역산을 위한 구성요소 반환 추가) ---
+def calculate_rsi_components(series, period=2):
     delta = series.diff()
     up = delta.clip(lower=0)
     down = -1 * delta.clip(upper=0)
     ema_up = up.ewm(com=period-1, adjust=False).mean()
     ema_down = down.ewm(com=period-1, adjust=False).mean()
     rs = ema_up / ema_down
-    return 100 - (100 / (1 + rs))
+    rsi = 100 - (100 / (1 + rs))
+    return rsi, ema_up, ema_down
 
 # --- 데이터 로드 함수 ---
 @st.cache_data(show_spinner=False)
@@ -74,10 +75,14 @@ def load_market_data(start, end):
         'SOXX_Close': df_soxx['Close']
     }).dropna().sort_index()
     
-    df['SOXX_RSI'] = calculate_rsi(df['SOXX_Close'], period=2)
+    rsi_series, ema_up, ema_down = calculate_rsi_components(df['SOXX_Close'], period=2)
+    df['SOXX_RSI'] = rsi_series
+    df['SOXX_ema_up'] = ema_up
+    df['SOXX_ema_down'] = ema_down
+    
     return df.dropna().copy()
 
-# --- 데이터프레임 스타일링 함수 (Tab 1 용) ---
+# --- 데이터프레임 스타일링 함수 ---
 def bg_color_sections(col):
     no_color_cols = ["진행도", "거래일", "SOXL 종가"]
     orange_cols = [
@@ -111,7 +116,6 @@ def highlight_progress(val):
         return 'background-color: #A9DFBF; color: black; font-weight: bold;'
     return ''
 
-# --- 데이터프레임 스타일링 함수 (Tab 2 용) ---
 def style_order_table(row):
     if '매수' in str(row['구분 (매수/매도)']):
         return ['background-color: rgba(231, 76, 60, 0.2)'] * len(row)
@@ -168,7 +172,6 @@ if run_button:
                 daily_records = []
                 max_equity = INIT_CASH
 
-                # 시뮬레이션 루프
                 for i in range(trade_start_idx, len(df)):
                     current_date = df.index[i].date()
                     if current_date > end_date:
@@ -367,7 +370,6 @@ if run_button:
                 else:
                     df_records = pd.DataFrame(daily_records)
                     
-                    # 탭 분리
                     tab1, tab2 = st.tabs(["📊 백테스트 및 누적 매매 일지", "🛒 오늘의 실전 LOC 매매표"])
                     
                     # ----------------------------------------
@@ -418,26 +420,38 @@ if run_button:
                         st.dataframe(styled_df, use_container_width=True, height=500, hide_index=True, column_order=ordered_columns)
 
                     # ----------------------------------------
-                    # [Tab 2] 실전 LOC 주문표
+                    # [Tab 2] 실전 LOC 주문표 (RSI Wilder's 역산 적용)
                     # ----------------------------------------
                     with tab2:
                         st.subheader("🚨 오늘 밤 미국 장 LOC 주문표")
                         
-                        # 마지막 날짜 데이터 추출 (주문 기준 데이터)
                         last_row = df_records.iloc[-1]
-                        last_close = float(last_row['SOXL 종가'])
-                        last_rsi = float(df['SOXX_RSI'].iloc[-1])
-                        current_cash = float(last_row['예수금(Cash)'])
+                        last_soxx_close = float(df['SOXX_Close'].iloc[-1])
+                        last_soxl_close = float(df['SOXL_Close'].iloc[-1])
                         
-                        # A. 현재 계좌 상태 요약 (우측 상단 블록 모방)
-                        st.markdown(f"**기준일(마지막 장 마감):** {last_row['거래일']} | **전일 종가:** ${last_close:.2f} | **SOXX RSI:** {last_rsi:.2f}")
+                        # 전일 EMA 값을 이용한 RSI 역산 수식 세팅
+                        last_ema_up = float(df['SOXX_ema_up'].iloc[-1])
+                        last_ema_down = float(df['SOXX_ema_down'].iloc[-1])
+                        
+                        # RSI 22 이하 도달 (하락 시점) Target SOXX 및 SOXL 추정가
+                        soxx_buy_target = last_soxx_close + last_ema_down - ((100 - 22) / 22) * last_ema_up
+                        soxx_buy_pct = (soxx_buy_target - last_soxx_close) / last_soxx_close
+                        soxl_rsi_buy_price = last_soxl_close * (1 + 3 * soxx_buy_pct)
+                        
+                        # RSI 25 이상 도달 (상승 시점) Target SOXX 및 SOXL 추정가
+                        soxx_sell_target = last_soxx_close + (25 / (100 - 25)) * last_ema_down - last_ema_up
+                        soxx_sell_pct = (soxx_sell_target - last_soxx_close) / last_soxx_close
+                        soxl_rsi_sell_price = last_soxl_close * (1 + 3 * soxx_sell_pct)
+                        
+                        last_rsi = float(df['SOXX_RSI'].iloc[-1])
+                        
+                        st.markdown(f"**기준일(마지막 장 마감):** {last_row['거래일']} | **전일 SOXL 종가:** ${last_soxl_close:.2f} | **SOXX RSI:** {last_rsi:.2f}")
                         
                         col_acc1, col_acc2, col_acc3 = st.columns(3)
                         col_acc1.metric("최종 매수가 (평단)", f"${last_row['Main 평단']}" if last_row['Main 평단'] != "" else "$0.00")
                         col_acc2.metric("보유 수량", f"{last_row['Main 수량']} 주")
                         col_acc3.metric("진행 일수 (MOC 24일)", f"{last_row['진행일']} 일")
 
-                        # B. 통합 주문 상세 표 구성
                         order_list = []
                         buy_summary = []
                         sell_summary = []
@@ -445,7 +459,7 @@ if run_button:
                         # 1) Main 매도 계산
                         if main_shares > 0:
                             if main_add_buy_count >= C_LIMIT:
-                                sell_price = last_close * (1 + EXH_TP)
+                                sell_price = last_soxl_close * (1 + EXH_TP)
                             else:
                                 sell_price = main_last_buy_close * (1 + TP_RATE)
                             
@@ -457,8 +471,7 @@ if run_button:
                         
                         # 2) Main 매수 계산
                         if main_shares == 0:
-                            # 신규 진입 대기 상태
-                            buy_price = last_close * 1.05
+                            buy_price = last_soxl_close * 1.05
                             buy_qty = math.floor(disp_init / buy_price) if buy_price > 0 else 0
                             if buy_qty > 0:
                                 order_list.append({
@@ -467,10 +480,9 @@ if run_button:
                                 })
                                 buy_summary.append((round(buy_price, 2), buy_qty))
                         else:
-                            # 추가 매수 진행 중 (C_LIMIT 미만일 때)
                             if main_add_buy_count < C_LIMIT:
-                                buy_price_1 = last_close * (1 - DROP_BUY_RATE_1)
-                                buy_price_2 = last_close * (1 - DROP_BUY_RATE_2)
+                                buy_price_1 = last_soxl_close * (1 - DROP_BUY_RATE_1)
+                                buy_price_2 = last_soxl_close * (1 - DROP_BUY_RATE_2)
                                 
                                 tgt_amt = main_cycle_invested * K_FRAC
                                 qty_1 = math.floor(tgt_amt / buy_price_1) if buy_price_1 > 0 else 0
@@ -489,22 +501,25 @@ if run_button:
                                     })
                                     buy_summary.append((round(buy_price_2, 2), qty_2))
 
-                        # 3) RSI 매매 계산
+                        # 3) RSI 매매 계산 (역산된 LOC 가격 적용)
                         if rsi_shares > 0:
                             order_list.append({
-                                '구분 (매수/매도)': '매도 (RSI 대기)', '거래방법': '조건부', 
-                                '가격 ($)': 'RSI 25 도달시', '수량 (주)': rsi_shares
+                                '구분 (매수/매도)': '매도 (RSI 익절)', '거래방법': 'LOC', 
+                                '가격 ($)': round(soxl_rsi_sell_price, 2), '수량 (주)': rsi_shares
                             })
-                        elif rsi_shares == 0 and last_rsi <= 22 and rsi_buy_count < 2:
-                            rsi_buy_price = last_close * 1.05 # 진입 기준 러프하게 잡음
-                            rsi_target = active_rsi_budget / 2 if active_rsi_budget > 0 else latest_rsi_budget / 2
-                            rsi_qty = math.floor(rsi_target / rsi_buy_price) if rsi_buy_price > 0 else 0
-                            if rsi_qty > 0:
-                                order_list.append({
-                                    '구분 (매수/매도)': '매수 (RSI 신규)', '거래방법': '조건부 (LOC)', 
-                                    '가격 ($)': round(rsi_buy_price, 2), '수량 (주)': rsi_qty
-                                })
-                                buy_summary.append((round(rsi_buy_price, 2), rsi_qty))
+                            sell_summary.append((round(soxl_rsi_sell_price, 2), rsi_shares))
+                            
+                        elif rsi_shares == 0 and rsi_buy_count < 2:
+                            rsi_target_amt = active_rsi_budget / 2 if active_rsi_budget > 0 else latest_rsi_budget / 2
+                            # 목표가가 음수 등 비정상 수치로 떨어지지 않는 정상적인 시장 상황에서만 렌더링
+                            if soxl_rsi_buy_price > 0:
+                                rsi_qty = math.floor(rsi_target_amt / soxl_rsi_buy_price)
+                                if rsi_qty > 0:
+                                    order_list.append({
+                                        '구분 (매수/매도)': '매수 (RSI 신규)', '거래방법': 'LOC', 
+                                        '가격 ($)': round(soxl_rsi_buy_price, 2), '수량 (주)': rsi_qty
+                                    })
+                                    buy_summary.append((round(soxl_rsi_buy_price, 2), rsi_qty))
 
                         st.markdown("---")
                         col_table, col_summary = st.columns([1.5, 1])
