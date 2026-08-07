@@ -137,6 +137,10 @@ if run_button:
                 current_dd = ((total_equity / max_equity) - 1) * 100
 
                 sell_main, sell_rsi = False, False
+                
+                # 매도 관련 기록 초기화 (매일 리셋)
+                today_main_sell_date, today_main_profit, today_main_profit_rate = "", "", ""
+                today_rsi_sell_date, today_rsi_profit, today_rsi_profit_rate = "", "", ""
 
                 # [A] 매도 판별
                 if main_shares > 0:
@@ -154,22 +158,44 @@ if run_button:
                     if curr_soxx_rsi >= 25 or rsi_holding_days >= 10:
                         sell_rsi = True
 
-                # [A] 매도 실행
+                # [A] 매도 실행 및 수익 계산
                 if sell_main:
                     exec_price = curr_soxl * (1 - SLIPPAGE)
                     sell_amount = main_shares * exec_price
+                    
+                    # 수익금 및 손익률 계산
+                    profit = sell_amount - main_cycle_invested
+                    profit_rate = (profit / main_cycle_invested * 100) if main_cycle_invested > 0 else 0
+                    
+                    today_main_sell_date = date_str
+                    today_main_profit = round(profit, 2)
+                    today_main_profit_rate = f"{profit_rate:.2f}%"
+                    
                     cash += sell_amount
                     trade_count_main += 1
                     if sell_amount > main_cycle_invested:
                         win_count_main += 1
+                        
+                    # Main 관련 변수 리셋
                     main_shares, main_holding_days, main_cycle_invested = 0, 0, 0.0
                     main_last_buy_close, main_add_buy_count = 0.0, 0
 
                 if sell_rsi:
                     exec_price = curr_soxl * (1 - SLIPPAGE)
                     sell_amount = rsi_shares * exec_price
+                    
+                    # 수익금 및 손익률 계산
+                    profit = sell_amount - rsi_invested
+                    profit_rate = (profit / rsi_invested * 100) if rsi_invested > 0 else 0
+                    
+                    today_rsi_sell_date = date_str
+                    today_rsi_profit = round(profit, 2)
+                    today_rsi_profit_rate = f"{profit_rate:.2f}%"
+                    
                     cash += sell_amount
                     trade_count_rsi += 1
+                    
+                    # RSI 관련 변수 리셋
                     rsi_shares, rsi_invested, rsi_buy_count, rsi_holding_days = 0, 0.0, 0, 0
 
                 # [B] 매수 판별 및 실행
@@ -239,10 +265,19 @@ if run_button:
                     "진행도": current_progress,
                     "거래일": date_str,
                     "SOXL 종가": round(curr_soxl, 2),
+                    
                     "Main 수량": main_shares,
+                    "Main 매도일": today_main_sell_date,
+                    "Main 수익금": today_main_profit,
+                    "Main 손익률": today_main_profit_rate,
                     "Main 평단": round(main_avg_price, 2) if main_avg_price > 0 else "",
+                    
                     "RSI 수량": rsi_shares,
+                    "RSI 매도일": today_rsi_sell_date,
+                    "RSI 수익금": today_rsi_profit,
+                    "RSI 손익률": today_rsi_profit_rate,
                     "RSI 평단": round(rsi_avg_price, 2) if rsi_avg_price > 0 else "",
+                    
                     "입출금": round(flow_today, 0) if flow_today != 0 else "",
                     "현재 DD (%)": round(current_dd, 2),
                     "예수금(Cash)": round(cash, 2),
@@ -278,14 +313,14 @@ if run_button:
             # --- 구역 C: 상세 매매 일지 (스프레드시트 뷰) ---
             st.subheader("📋 3. 일자별 상세 매매 일지 (최신순)")
             
-            # 최신순 역렬
+            # 최신순 정렬
             df_records_reversed = df_records.sort_values(by="거래일", ascending=False).reset_index(drop=True)
             
             # 지정하신 순서대로 열(Column) 재배치
             ordered_columns = [
                 "거래일", "SOXL 종가", 
-                "Main 수량", "Main 평단", 
-                "RSI 수량", "RSI 평단", 
+                "Main 수량", "Main 매도일", "Main 수익금", "Main 손익률", "Main 평단", 
+                "RSI 수량", "RSI 매도일", "RSI 수익금", "RSI 손익률", "RSI 평단", 
                 "입출금", "현재 DD (%)", 
                 "예수금(Cash)", "총 자산(Equity)"
             ]
@@ -293,7 +328,7 @@ if run_button:
             # 열 순서 적용
             df_records_reversed = df_records_reversed[["진행도"] + ordered_columns]
             
-            # 의미없는 0, 1, 2 인덱스를 '진행도'로 교체
+            # '진행도'를 인덱스로 교체
             df_records_reversed = df_records_reversed.set_index("진행도")
             
             # 데이터프레임 렌더링
@@ -302,4 +337,3 @@ if run_button:
                 use_container_width=True,
                 height=500
             )
-
