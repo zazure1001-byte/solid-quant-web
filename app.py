@@ -35,9 +35,9 @@ with st.expander("📝 1. 기본 설정 및 입출금 기록 (터치하여 열�
         submitted = st.form_submit_button("내역 추가하기")
         if submitted and f_amt != 0:
             st.session_state['capital_flows'].append({'Date': f_date, 'Amount': f_amt})
-            st.success(f"{f_date} 일자에 ${f_amt:,.0f} 기록 완료!")
+            st.success(f"{f_date} 일자에 {f_amt:,.0f} 달러 기록 완료!")
 
-    # 입력된 입출금 리스트 보여주기 및 삭제 (간이 구현)
+    # 입력된 입출금 리스트 보여주기 및 삭제
     if st.session_state['capital_flows']:
         flow_df = pd.DataFrame(st.session_state['capital_flows'])
         st.dataframe(flow_df, use_container_width=True)
@@ -86,13 +86,13 @@ if run_button:
             trade_start_idx = df.index.searchsorted(pd.to_datetime(start_date))
             
             # --- 내부 고정 파라미터 ---
-            X_FRAC = 0.35      # 35%
-            K_FRAC = 0.125     # 12.5%
-            C_LIMIT = 7        # 7회
-            TP_RATE = 0.06     # 6%
-            EXH_TP = 0.03      # 3%
-            SLIPPAGE = 0.0     # 0%
-            RSI_FRAC = 0.30    # 30%
+            X_FRAC = 0.35      
+            K_FRAC = 0.125     
+            C_LIMIT = 7        
+            TP_RATE = 0.06     
+            EXH_TP = 0.03      
+            SLIPPAGE = 0.0     
+            RSI_FRAC = 0.30    
             MAX_HOLD_DAYS = 24
             DROP_BUY_RATE_1 = 0.010
             DROP_BUY_RATE_2 = 0.100
@@ -114,7 +114,6 @@ if run_button:
             
             trade_count_main, win_count_main, trade_count_rsi = 0, 0, 0
             
-            # 기록 저장용 리스트
             daily_records = []
             max_equity = INIT_CASH
 
@@ -230,18 +229,24 @@ if run_button:
                 main_avg_price = (main_cycle_invested / main_shares) if main_shares > 0 else 0
                 rsi_avg_price = (rsi_invested / rsi_shares) if rsi_shares > 0 else 0
                 
+                # 진행도 계산 (매도시 0, 1차 진입시 1, 풀매수시 8)
+                if main_shares == 0:
+                    current_progress = 0
+                else:
+                    current_progress = main_add_buy_count + 1
+                
                 daily_records.append({
+                    "진행도": current_progress,
                     "거래일": date_str,
                     "SOXL 종가": round(curr_soxl, 2),
-                    "입출금": round(flow_today, 0) if flow_today != 0 else "",
-                    "예수금(Cash)": round(cash, 2),
-                    "총 자산(Equity)": round(final_equity, 2),
                     "Main 수량": main_shares,
                     "Main 평단": round(main_avg_price, 2) if main_avg_price > 0 else "",
                     "RSI 수량": rsi_shares,
                     "RSI 평단": round(rsi_avg_price, 2) if rsi_avg_price > 0 else "",
-                    "진행도(C)": f"{main_add_buy_count} / {C_LIMIT}",
-                    "현재 DD (%)": round(current_dd, 2)
+                    "입출금": round(flow_today, 0) if flow_today != 0 else "",
+                    "현재 DD (%)": round(current_dd, 2),
+                    "예수금(Cash)": round(cash, 2),
+                    "총 자산(Equity)": round(final_equity, 2)
                 })
 
             # --- 구역 B: 핵심 요약 보드 ---
@@ -251,7 +256,6 @@ if run_button:
             final_cash = df_records.iloc[-1]['예수금(Cash)']
             years = len(df_records) / 252
             
-            # 입출금을 고려한 추정 CAGR 계산 (단순화)
             cagr = ((final_asset / total_net_investment) ** (1/years) - 1) * 100 if years > 0 and total_net_investment > 0 else 0
             mdd = df_records['현재 DD (%)'].min()
             win_rate = (win_count_main / trade_count_main * 100) if trade_count_main > 0 else 0
@@ -273,12 +277,29 @@ if run_button:
 
             # --- 구역 C: 상세 매매 일지 (스프레드시트 뷰) ---
             st.subheader("📋 3. 일자별 상세 매매 일지 (최신순)")
-            # 보기 편하도록 최근 날짜가 위로 오게 역순 정렬
+            
+            # 최신순 역렬
             df_records_reversed = df_records.sort_values(by="거래일", ascending=False).reset_index(drop=True)
             
-            # 데이터프레임 스타일링 (모바일 화면 대응)
+            # 지정하신 순서대로 열(Column) 재배치
+            ordered_columns = [
+                "거래일", "SOXL 종가", 
+                "Main 수량", "Main 평단", 
+                "RSI 수량", "RSI 평단", 
+                "입출금", "현재 DD (%)", 
+                "예수금(Cash)", "총 자산(Equity)"
+            ]
+            
+            # 열 순서 적용
+            df_records_reversed = df_records_reversed[["진행도"] + ordered_columns]
+            
+            # 의미없는 0, 1, 2 인덱스를 '진행도'로 교체
+            df_records_reversed = df_records_reversed.set_index("진행도")
+            
+            # 데이터프레임 렌더링
             st.dataframe(
                 df_records_reversed,
                 use_container_width=True,
                 height=500
             )
+
