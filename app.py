@@ -17,7 +17,6 @@ if 'capital_flows' not in st.session_state:
 with st.expander("📝 1. 기본 설정 및 입출금 기록 (터치하여 열기)", expanded=True):
     col1, col2 = st.columns(2)
     with col1:
-        # 기본 시작일을 2025년 등 최근 날짜로도 자유롭게 바꿀 수 있도록 설정
         start_date = st.date_input("백테스트 시작일", date(2025, 1, 1))
         INIT_CASH = st.number_input("초기 자본 ($)", min_value=1000.0, value=100000.0, step=1000.0)
     with col2:
@@ -38,7 +37,6 @@ with st.expander("📝 1. 기본 설정 및 입출금 기록 (터치하여 열�
             st.session_state['capital_flows'].append({'Date': f_date, 'Amount': f_amt})
             st.success(f"{f_date} 일자에 {f_amt:,.0f} 달러 기록 완료!")
 
-    # 입력된 입출금 리스트 보여주기 및 삭제
     if st.session_state['capital_flows']:
         flow_df = pd.DataFrame(st.session_state['capital_flows'])
         st.dataframe(flow_df, use_container_width=True)
@@ -58,12 +56,10 @@ def calculate_rsi(series, period=2):
     rs = ema_up / ema_down
     return 100 - (100 / (1 + rs))
 
-# --- 데이터 로드 함수 (최신 날짜 대응 보완) ---
+# --- 데이터 로드 함수 ---
 @st.cache_data(show_spinner=False)
 def load_market_data(start, end):
-    # 지표 계산용 여유 기간 확보 (시작일보다 90일 전부터 다운로드)
     data_start = start - timedelta(days=90)
-    # yfinance end 파라미터는 exclusive이므로 하루 뒤로 설정하여 당일 데이터까지 확실히 포함
     data_end = end + timedelta(days=1)
     
     df_soxl = yf.download("SOXL", start=data_start, end=data_end, auto_adjust=True, progress=False)
@@ -81,6 +77,25 @@ def load_market_data(start, end):
     df['SOXX_RSI'] = calculate_rsi(df['SOXX_Close'], period=2)
     return df.dropna().copy()
 
+# --- 데이터프레임 스타일링 함수 ---
+def color_profit(val):
+    if val == "":
+        return ""
+    try:
+        num = float(str(val).replace('%', '').replace(',', ''))
+        if num > 0:
+            return 'color: #E74C3C;' # 빨간색
+        elif num < 0:
+            return 'color: #3498DB;' # 파란색
+    except:
+        pass
+    return ''
+
+def highlight_progress(val):
+    if val == 0:
+        return 'background-color: #A9DFBF; color: black;' # 민트색 배경
+    return ''
+
 # --- 메인 실행 로직 ---
 if run_button:
     if start_date >= end_date:
@@ -88,8 +103,6 @@ if run_button:
     else:
         with st.spinner("시장 데이터 동기화 및 기록장 작성 중..."):
             df = load_market_data(start_date, end_date)
-            
-            # 입력한 시작일 이상에 해당하는 데이터 인덱스 탐색
             trade_start_idx = df.index.searchsorted(pd.to_datetime(start_date))
             
             if trade_start_idx >= len(df):
@@ -107,7 +120,6 @@ if run_button:
                 DROP_BUY_RATE_1 = 0.010
                 DROP_BUY_RATE_2 = 0.100
                 
-                # 자본 흐름 딕셔너리 매핑
                 flows_dict = {}
                 for f in st.session_state['capital_flows']:
                     d_str = f['Date'].strftime('%Y-%m-%d')
@@ -130,12 +142,11 @@ if run_button:
                 # 시뮬레이션 루프
                 for i in range(trade_start_idx, len(df)):
                     current_date = df.index[i].date()
-                    if current_date > end_date: # 종료일 이후 데이터는 차단
+                    if current_date > end_date:
                         break
                         
                     date_str = current_date.strftime('%Y-%m-%d')
                     
-                    # 당일 자본 입출금 적용
                     flow_today = flows_dict.get(date_str, 0.0)
                     if flow_today != 0:
                         cash += flow_today
@@ -170,7 +181,7 @@ if run_button:
                         if curr_soxx_rsi >= 25 or rsi_holding_days >= 10:
                             sell_rsi = True
 
-                    # [A] 매도 실행 및 수익 계산
+                    # [A] 매도 실행
                     if sell_main:
                         exec_price = curr_soxl * (1 - SLIPPAGE)
                         sell_amount = main_shares * exec_price
@@ -258,7 +269,6 @@ if run_button:
                                 rsi_buy_count += 1
                                 if rsi_buy_count == 1: rsi_holding_days = 0
 
-                    # 당일 마감 기록
                     final_equity = cash + (main_shares + rsi_shares) * curr_soxl
                     main_avg_price = (main_cycle_invested / main_shares) if main_shares > 0 else 0
                     rsi_avg_price = (rsi_invested / rsi_shares) if rsi_shares > 0 else 0
@@ -274,16 +284,16 @@ if run_button:
                         "SOXL 종가": round(curr_soxl, 2),
                         
                         "Main 수량": main_shares,
+                        "Main 평단": round(main_avg_price, 2) if main_avg_price > 0 else "",
                         "Main 매도일": today_main_sell_date,
                         "Main 수익금": today_main_profit,
                         "Main 손익률": today_main_profit_rate,
-                        "Main 평단": round(main_avg_price, 2) if main_avg_price > 0 else "",
                         
                         "RSI 수량": rsi_shares,
+                        "RSI 평단": round(rsi_avg_price, 2) if rsi_avg_price > 0 else "",
                         "RSI 매도일": today_rsi_sell_date,
                         "RSI 수익금": today_rsi_profit,
                         "RSI 손익률": today_rsi_profit_rate,
-                        "RSI 평단": round(rsi_avg_price, 2) if rsi_avg_price > 0 else "",
                         
                         "입출금": round(flow_today, 0) if flow_today != 0 else "",
                         "현재 DD (%)": round(current_dd, 2),
@@ -294,7 +304,6 @@ if run_button:
                 if not daily_records:
                     st.warning("선택한 조건에 해당하는 결과가 없습니다.")
                 else:
-                    # --- 구역 B: 핵심 요약 보드 ---
                     df_records = pd.DataFrame(daily_records)
                     
                     final_asset = df_records.iloc[-1]['총 자산(Equity)']
@@ -320,24 +329,28 @@ if run_button:
                     c7.metric("현재 위치 (DD)", f"{df_records.iloc[-1]['현재 DD (%)']:.2f}%")
                     c8.metric("총 매매 횟수", f"{trade_count_main + trade_count_rsi}회")
 
-                    # --- 구역 C: 상세 매매 일지 (스프레드시트 뷰) ---
                     st.subheader("📋 3. 일자별 상세 매매 일지 (최신순)")
                     
                     df_records_reversed = df_records.sort_values(by="거래일", ascending=False).reset_index(drop=True)
                     
+                    # 새로운 열 순서 적용
                     ordered_columns = [
-                        "거래일", "SOXL 종가", 
-                        "Main 수량", "Main 매도일", "Main 수익금", "Main 손익률", "Main 평단", 
-                        "RSI 수량", "RSI 매도일", "RSI 수익금", "RSI 손익률", "RSI 평단", 
-                        "입출금", "현재 DD (%)", 
-                        "예수금(Cash)", "총 자산(Equity)"
+                        "진행도", "거래일", "SOXL 종가", 
+                        "Main 수량", "Main 평단", "Main 매도일", "Main 수익금", "Main 손익률", 
+                        "RSI 수량", "RSI 평단", "RSI 매도일", "RSI 수익금", "RSI 손익률", 
+                        "입출금", "현재 DD (%)", "예수금(Cash)", "총 자산(Equity)"
                     ]
+                    df_records_reversed = df_records_reversed[ordered_columns]
                     
-                    df_records_reversed = df_records_reversed[["진행도"] + ordered_columns]
-                    df_records_reversed = df_records_reversed.set_index("진행도")
+                    # Pandas Styler 적용
+                    styled_df = df_records_reversed.style\
+                        .map(highlight_progress, subset=['진행도'])\
+                        .map(color_profit, subset=['Main 수익금', 'Main 손익률', 'RSI 수익금', 'RSI 손익률'])
                     
+                    # hide_index=True 로 지저분한 기본 인덱스 숨김 처리
                     st.dataframe(
-                        df_records_reversed,
+                        styled_df,
                         use_container_width=True,
-                        height=500
+                        height=500,
+                        hide_index=True
                     )
