@@ -8,8 +8,9 @@ import json
 import urllib.parse
 from datetime import date, timedelta
 
-# 💡 발급받으신 고유 클라우드 저장소 주소가 적용되었습니다!
-KVDB_URL = "https://kvdb.io/RNBYoRrQqa3CotY4QTvMtW"
+# 💡 사진에 올려주신 회원님의 실제 버킷 ID가 적용되었습니다!
+KVDB_BUCKET_ID = "Ac7ERULjDV2o4YyVfVgJdK"  
+KVDB_URL = f"https://kvdb.io/{KVDB_BUCKET_ID}"
 
 # --- 페이지 기본 설정 (모바일 최적화) ---
 st.set_page_config(page_title="SOLID: Soxl Hybrid Strategy", layout="wide", initial_sidebar_state="collapsed")
@@ -60,7 +61,7 @@ with col_btn1:
                 "rsi_split": st.session_state['rsi_split'], "rsi_moc": st.session_state['rsi_moc']
             }
             try:
-                # 데이터 통신 안정성을 위한 PUT 방식 및 JSON 암호화 적용
+                # 💡 Public 버킷이므로 auth 파라미터를 완전히 제거했습니다!
                 safe_user_id = urllib.parse.quote(user_id.strip())
                 target_url = f"{KVDB_URL}/{safe_user_id}"
                 headers = {"Content-Type": "application/json"}
@@ -70,7 +71,7 @@ with col_btn1:
                 if resp.status_code in [200, 201]:
                     st.success("✅ 클라우드 저장 완료! 이제 언제든 불러올 수 있습니다.")
                 else:
-                    st.error(f"❌ 저장 실패: 서버 거부 (코드: {resp.status_code})")
+                    st.error(f"❌ 저장 실패 (코드: {resp.status_code})")
             except Exception as e:
                 st.error(f"❌ 네트워크 오류 발생: {e}")
 
@@ -81,10 +82,12 @@ with col_btn2:
             st.warning("닉네임을 먼저 입력해주세요.")
         else:
             try:
+                # 💡 마찬가지로 불러올 때도 비밀 키를 빼고 요청합니다!
                 safe_user_id = urllib.parse.quote(user_id.strip())
                 target_url = f"{KVDB_URL}/{safe_user_id}"
                 
                 resp = requests.get(target_url)
+                
                 if resp.status_code == 200:
                     data = resp.json()
                     st.session_state['start'] = date.fromisoformat(data.get("start", "2026-06-30"))
@@ -102,7 +105,7 @@ with col_btn2:
                     st.session_state['rsi_sell'] = float(data.get("rsi_sell", 25.0))
                     st.session_state['rsi_split'] = int(data.get("rsi_split", 2))
                     st.session_state['rsi_moc'] = int(data.get("rsi_moc", 10))
-                    st.rerun()  # 💡 값을 덮어씌운 후 화면 새로고침하여 적용
+                    st.rerun() 
                 elif resp.status_code == 404:
                     st.warning("⚠️ 해당 닉네임으로 저장된 설정이 없습니다.")
                 else:
