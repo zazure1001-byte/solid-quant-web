@@ -142,6 +142,12 @@ def style_order_table(row):
         return ['background-color: rgba(52, 152, 219, 0.2)'] * len(row)
     return [''] * len(row)
 
+# 데이터프레임 소수점 둘째 자리 포맷 함수
+def to_2_decimals(val):
+    if isinstance(val, (int, float)) and not pd.isna(val):
+        return f"{val:.2f}"
+    return val
+
 # --- 메인 실행 로직 ---
 if run_button:
     if start_date >= end_date:
@@ -363,7 +369,7 @@ if run_button:
                     final_equity = cash + (main_shares + rsi_shares) * curr_soxl
                     current_progress = 0 if main_shares == 0 else main_add_buy_count + 1
                     cum_realized += today_realized_profit
-                    disp_realized = round(today_realized_profit, 2) if (today_main_sell_date or today_rsi_sell_date) else ""
+                    disp_realized = today_realized_profit if (today_main_sell_date or today_rsi_sell_date) else ""
                     
                     unrealized = 0.0
                     if main_shares > 0: unrealized += (main_shares * curr_soxl) - main_cycle_invested
@@ -390,33 +396,33 @@ if run_button:
                     daily_records.append({
                         "진행도": current_progress,
                         "거래일": date_str,
-                        "SOXL 종가": round(curr_soxl, 2),
+                        "SOXL 종가": curr_soxl,
                         "Main 수량": main_shares,
-                        "Main 평단": round(main_avg_price, 2) if main_avg_price > 0 else "",
+                        "Main 평단": main_avg_price if main_avg_price > 0 else "",
                         "Main 매도일": today_main_sell_date,
                         "Main 수익금": today_main_profit,
                         "Main 손익률": today_main_profit_rate,
                         "RSI 수량": rsi_shares,
-                        "RSI 평단": round(rsi_avg_price, 2) if rsi_avg_price > 0 else "",
+                        "RSI 평단": rsi_avg_price if rsi_avg_price > 0 else "",
                         "RSI 매도일": today_rsi_sell_date,
                         "RSI 수익금": today_rsi_profit,
                         "RSI 손익률": today_rsi_profit_rate,
                         "실현손익": disp_realized,
-                        "평가손익": round(unrealized, 2),
-                        "누적 실현 손익": round(cum_realized, 2),
+                        "평가손익": unrealized,
+                        "누적 실현 손익": cum_realized,
                         "자산 손익률 (%)": f"{asset_return:.2f}%",
-                        "DD (%)": round(current_dd, 2),
-                        "초기 매수금": round(disp_init, 2),
-                        "1회 매수금": round(disp_1st, 2),
-                        "2회 매수금": round(disp_2nd, 2),
-                        "RSI 매수금": round(disp_rsi, 2),
-                        "투자 기준액": round(disp_base, 2),
+                        "DD (%)": current_dd,
+                        "초기 매수금": disp_init,
+                        "1회 매수금": disp_1st,
+                        "2회 매수금": disp_2nd,
+                        "RSI 매수금": disp_rsi,
+                        "투자 기준액": disp_base,
                         "진행일": main_holding_days,
-                        "YDD (%)": round(current_ydd, 2),
+                        "YDD (%)": current_ydd,
                         "현금 비중 (%)": f"{cash_ratio:.2f}%",
-                        "입출금": round(flow_today, 0) if flow_today != 0 else "",
-                        "예수금(Cash)": round(cash, 2),
-                        "총 자산(Equity)": round(final_equity, 2)
+                        "입출금": flow_today if flow_today != 0 else "",
+                        "예수금(Cash)": cash,
+                        "총 자산(Equity)": final_equity
                     })
 
                 if not daily_records:
@@ -463,13 +469,22 @@ if run_button:
                         ]
                         df_records_reversed = df_records_reversed[ordered_columns]
                         
+                        cols_to_format = [
+                            "SOXL 종가", "Main 평단", "Main 수익금", "RSI 평단", "RSI 수익금", 
+                            "평가손익", "실현손익", "누적 실현 손익", "DD (%)", "초기 매수금", 
+                            "1회 매수금", "2회 매수금", "RSI 매수금", "투자 기준액", "YDD (%)", 
+                            "현금 비중 (%)", "입출금", "예수금(Cash)", "총 자산(Equity)"
+                        ]
+                        format_dict = {col: to_2_decimals for col in cols_to_format}
+                        
                         styled_df = df_records_reversed.style\
                             .apply(bg_color_sections, axis=0)\
                             .map(highlight_progress, subset=['진행도'])\
                             .map(color_profit, subset=[
                                 'Main 수익금', 'Main 손익률', 'RSI 수익금', 'RSI 손익률', 
                                 '실현손익', '평가손익', '누적 실현 손익', '자산 손익률 (%)'
-                            ])
+                            ])\
+                            .format(format_dict)
                         
                         st.dataframe(styled_df, use_container_width=True, height=500, hide_index=True, column_order=ordered_columns)
 
@@ -498,10 +513,13 @@ if run_button:
                         
                         last_rsi = float(df['SOXX_RSI'].iloc[-1])
                         
+                        # 평단값 포맷팅 보호
+                        main_avg_disp = f"${float(last_row['Main 평단']):.2f}" if last_row['Main 평단'] != "" else "$0.00"
+                        
                         st.markdown(f"**기준일(마지막 장 마감):** {last_row['거래일']} | **전일 SOXL 종가:** ${last_soxl_close:.2f} | **SOXX RSI:** {last_rsi:.2f}")
                         
                         col_acc1, col_acc2, col_acc3 = st.columns(3)
-                        col_acc1.metric("최종 매수가 (평단)", f"${last_row['Main 평단']}" if last_row['Main 평단'] != "" else "$0.00")
+                        col_acc1.metric("최종 매수가 (평단)", main_avg_disp)
                         col_acc2.metric("보유 수량", f"{last_row['Main 수량']} 주")
                         col_acc3.metric("진행 일수 (MOC 24일)", f"{last_row['진행일']} 일")
 
@@ -522,7 +540,7 @@ if run_button:
                             })
                             sell_summary.append((round(sell_price, 2), main_shares))
                         
-                        # 2) Main 매수 계산 (반올림 및 현금 초과 방지 적용)
+                        # 2) Main 매수 계산
                         if main_shares == 0:
                             buy_price = last_soxl_close * 1.05
                             if buy_price > 0:
@@ -567,7 +585,7 @@ if run_button:
                                     })
                                     buy_summary.append((round(buy_price_2, 2), qty_2))
 
-                        # 3) RSI 매매 계산 (반올림 및 현금 초과 방지 적용)
+                        # 3) RSI 매매 계산
                         if rsi_shares > 0:
                             order_list.append({
                                 '구분 (매수/매도)': '매도 (RSI 익절)', '거래방법': 'LOC', 
