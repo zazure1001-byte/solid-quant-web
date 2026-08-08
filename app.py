@@ -252,6 +252,7 @@ if run_button:
                         cash += sell_amount
                         trade_count_rsi += 1
                         rsi_shares, rsi_invested, rsi_buy_count, rsi_holding_days = 0, 0.0, 0, 0
+                        active_rsi_budget = 0.0 # 매도 시 예산 상태 초기화
 
                     if not sell_main:
                         if main_shares == 0:
@@ -292,7 +293,13 @@ if run_button:
 
                     if not sell_rsi:
                         if curr_soxx_rsi <= 22 and rsi_buy_count < 2:
-                            if rsi_buy_count == 0: active_rsi_budget = latest_rsi_budget
+                            if rsi_buy_count == 0: 
+                                # RSI 첫 진입 시: Main이 대기 중이면 현재 총자산 기준, 아니면 고정된 latest 예산 사용
+                                if main_shares == 0:
+                                    active_rsi_budget = total_equity * RSI_FRAC
+                                else:
+                                    active_rsi_budget = latest_rsi_budget
+                                    
                             target_rsi_amt = active_rsi_budget / 2
                             ep = curr_soxl * (1 + SLIPPAGE)
                             buy_qty = round(target_rsi_amt / ep)
@@ -420,7 +427,7 @@ if run_button:
                         st.dataframe(styled_df, use_container_width=True, height=500, hide_index=True, column_order=ordered_columns)
 
                     # ----------------------------------------
-                    # [Tab 2] 실전 LOC 주문표 (RSI Wilder's 역산 적용)
+                    # [Tab 2] 실전 LOC 주문표 (RSI 예산 버그 픽스)
                     # ----------------------------------------
                     with tab2:
                         st.subheader("🚨 오늘 밤 미국 장 LOC 주문표")
@@ -428,6 +435,7 @@ if run_button:
                         last_row = df_records.iloc[-1]
                         last_soxx_close = float(df['SOXX_Close'].iloc[-1])
                         last_soxl_close = float(df['SOXL_Close'].iloc[-1])
+                        last_total_equity = float(last_row['총 자산(Equity)'])
                         
                         last_ema_up = float(df['SOXX_ema_up'].iloc[-1])
                         last_ema_down = float(df['SOXX_ema_down'].iloc[-1])
@@ -498,7 +506,7 @@ if run_button:
                                     })
                                     buy_summary.append((round(buy_price_2, 2), qty_2))
 
-                        # 3) RSI 매매 계산
+                        # 3) RSI 매매 계산 (버그 픽스 완료)
                         if rsi_shares > 0:
                             order_list.append({
                                 '구분 (매수/매도)': '매도 (RSI 익절)', '거래방법': 'LOC', 
@@ -507,7 +515,14 @@ if run_button:
                             sell_summary.append((round(soxl_rsi_sell_price, 2), rsi_shares))
                             
                         elif rsi_shares == 0 and rsi_buy_count < 2:
-                            rsi_target_amt = active_rsi_budget / 2 if active_rsi_budget > 0 else latest_rsi_budget / 2
+                            # Main이 대기 중이면 현재 총자산 기준 할당, 아니면 기존 고정 할당 사용
+                            if main_shares == 0:
+                                current_rsi_budget = last_total_equity * RSI_FRAC
+                            else:
+                                current_rsi_budget = latest_rsi_budget
+                            
+                            rsi_target_amt = current_rsi_budget / 2
+                            
                             if soxl_rsi_buy_price > 0:
                                 rsi_qty = math.floor(rsi_target_amt / soxl_rsi_buy_price)
                                 if rsi_qty > 0:
@@ -524,7 +539,6 @@ if run_button:
                             st.markdown("##### 📝 통합 주문 상세 표")
                             if order_list:
                                 df_orders = pd.DataFrame(order_list)
-                                # 포맷팅(.format)을 추가하여 소수점 둘째 자리 고정 출력
                                 styled_orders = df_orders.style\
                                     .apply(style_order_table, axis=1)\
                                     .format({'가격 ($)': "{:.2f}"})
