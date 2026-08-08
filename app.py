@@ -3,64 +3,77 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import math
+import json
 from datetime import date, timedelta
+from streamlit_local_storage import LocalStorage
 
 # --- 페이지 기본 설정 (모바일 최적화) ---
 st.set_page_config(page_title="SOLID: Soxl Hybrid Strategy", layout="wide", initial_sidebar_state="collapsed")
 st.title("SOLID: Soxl Hybrid Strategy")
 
+# --- 모바일 '당겨서 새로고침' 방지 CSS ---
+st.markdown("""
+    <style>
+        body, .stApp { overscroll-behavior-y: none; }
+    </style>
+""", unsafe_allow_html=True)
+
 # --- 세션 상태 초기화 (자본 출입 기록용) ---
 if 'capital_flows' not in st.session_state:
     st.session_state['capital_flows'] = []
 
-# --- 구역 A: 사용자 입력부 (URL 맞춤형 파라미터 적용) ---
-query_params = st.query_params
+# --- 로컬 스토리지 초기화 및 데이터 로드 ---
+localS = LocalStorage()
+saved_data = localS.getItem("solid_config")
 
-default_start_str = query_params.get("start", "2025-01-01")
-try: default_start = date.fromisoformat(default_start_str)
-except: default_start = date(2025, 1, 1)
+config = {}
+if saved_data:
+    try:
+        # 라이브러리 반환 형태(문자열 또는 딕셔너리)에 맞게 예외 처리
+        if isinstance(saved_data, str):
+            config = json.loads(saved_data)
+        else:
+            config = saved_data
+    except:
+        pass
 
-try: default_cash = float(query_params.get("cash", 100000.0))
-except: default_cash = 100000.0
+def get_param(param_name, default_val, cast_type):
+    # 1. URL 파라미터 우선 (URL로 공유된 맞춤 세팅 우선 적용)
+    val = st.query_params.get(param_name)
+    if val is not None:
+        try: return cast_type(val)
+        except: pass
+    
+    # 2. 로컬 스토리지 (기기 내부 쿠키) 확인
+    if param_name in config:
+        try:
+            if cast_type == date.fromisoformat:
+                return date.fromisoformat(config[param_name])
+            return cast_type(config[param_name])
+        except: pass
+        
+    # 3. 모두 없으면 기본값 반환
+    return default_val
 
-try: default_slippage = float(query_params.get("slippage", 0.1))
-except: default_slippage = 0.1
+# --- 초기 파라미터 세팅 ---
+default_start = get_param("start", date(2026, 6, 30), date.fromisoformat)
+default_cash = get_param("cash", 100000.0, float)
+default_slippage = get_param("slippage", 0.1, float)
 
-try: default_x_frac = float(query_params.get("x_frac", 35.0))
-except: default_x_frac = 35.0
+default_x_frac = get_param("x_frac", 35.0, float)
+default_k_frac = get_param("k_frac", 12.5, float)
+default_c_limit = get_param("c_limit", 7, int)
+default_tp_rate = get_param("tp_rate", 6.0, float)
 
-try: default_k_frac = float(query_params.get("k_frac", 12.5))
-except: default_k_frac = 12.5
+default_buy0 = get_param("buy0", 5.0, float)
+default_buy1 = get_param("buy1", -1.0, float)
+default_buy2 = get_param("buy2", -10.0, float)
+default_moc = get_param("moc", 24, int)
 
-try: default_c_limit = int(query_params.get("c_limit", 7))
-except: default_c_limit = 7
-
-try: default_tp_rate = float(query_params.get("tp_rate", 6.0))
-except: default_tp_rate = 6.0
-
-try: default_buy0 = float(query_params.get("buy0", 5.0))
-except: default_buy0 = 5.0
-
-try: default_buy1 = float(query_params.get("buy1", -1.0))
-except: default_buy1 = -1.0
-
-try: default_buy2 = float(query_params.get("buy2", -10.0))
-except: default_buy2 = -10.0
-
-try: default_moc = int(query_params.get("moc", 24))
-except: default_moc = 24
-
-try: default_rsi_buy = float(query_params.get("rsi_buy", 22.0))
-except: default_rsi_buy = 22.0
-
-try: default_rsi_sell = float(query_params.get("rsi_sell", 25.0))
-except: default_rsi_sell = 25.0
-
-try: default_rsi_split = int(query_params.get("rsi_split", 2))
-except: default_rsi_split = 2
-
-try: default_rsi_moc = int(query_params.get("rsi_moc", 10))
-except: default_rsi_moc = 10
+default_rsi_buy = get_param("rsi_buy", 22.0, float)
+default_rsi_sell = get_param("rsi_sell", 25.0, float)
+default_rsi_split = get_param("rsi_split", 2, int)
+default_rsi_moc = get_param("rsi_moc", 10, int)
 
 
 # 1. 기본 설정 및 입출금 기록
@@ -99,7 +112,7 @@ with st.expander("📝 1. 기본 설정 및 입출금 기록 (터치하여 열�
             st.session_state['capital_flows'] = []
             st.rerun()
 
-# 2. 하이브리드 전략 파라미터 설정
+# 2. 하이브리드 전략 파라미터 설정 및 영구 저장
 with st.expander("⚙️ 2. 하이브리드 전략 파라미터 설정 (고급)", expanded=False):
     st.markdown("##### 📌 Main 전략 설정")
     p_col1, p_col2 = st.columns(2)
@@ -132,12 +145,36 @@ with st.expander("⚙️ 2. 하이브리드 전략 파라미터 설정 (고급)"
     st.query_params["buy1"] = ui_buy1
     st.query_params["buy2"] = ui_buy2
     st.query_params["moc"] = ui_moc
-    
     st.query_params["rsi_buy"] = ui_rsi_buy
     st.query_params["rsi_sell"] = ui_rsi_sell
     st.query_params["rsi_split"] = ui_rsi_split
     st.query_params["rsi_moc"] = ui_rsi_moc
 
+    st.markdown("---")
+    # 💡 [핵심] 설정 영구 저장 전용 버튼 분리 배치
+    if st.button("💾 현재 설정 스마트폰에 영구 저장", use_container_width=True):
+        current_config = {
+            "start": start_date.strftime("%Y-%m-%d"),
+            "cash": INIT_CASH,
+            "slippage": ui_slippage,
+            "x_frac": ui_x_frac,
+            "k_frac": ui_k_frac,
+            "c_limit": ui_c_limit,
+            "tp_rate": ui_tp_rate,
+            "buy0": ui_buy0,
+            "buy1": ui_buy1,
+            "buy2": ui_buy2,
+            "moc": ui_moc,
+            "rsi_buy": ui_rsi_buy,
+            "rsi_sell": ui_rsi_sell,
+            "rsi_split": ui_rsi_split,
+            "rsi_moc": ui_rsi_moc
+        }
+        localS.setItem("solid_config", json.dumps(current_config))
+        st.success("✅ 설정이 성공적으로 저장되었습니다! 앱을 다시 켜도 이 설정이 유지됩니다.")
+
+st.markdown("<br>", unsafe_allow_html=True)
+# 💡 [핵심] 순수하게 백테스트만 실행하는 메인 엔진 구동 버튼
 run_button = st.button("🚀 매매표 생성 및 백테스트 실행", type="primary", use_container_width=True)
 
 # --- 보조지표 계산 함수 ---
@@ -672,7 +709,6 @@ if run_button:
                         if main_shares == 0:
                             buy_price = last_soxl_close * (1 + BUY0_MARGIN)
                             if buy_price > 0:
-                                # 💡 슬리피지 수량 보정
                                 actual_est_ep = buy_price * (1 + SLIPPAGE)
                                 buy_qty = round(disp_init / actual_est_ep)
                                 if buy_qty * actual_est_ep > current_cash: 
@@ -692,7 +728,6 @@ if run_button:
                                 
                                 qty_1 = 0
                                 if buy_price_1 > 0:
-                                    # 💡 슬리피지 수량 보정
                                     actual_est_ep_1 = buy_price_1 * (1 + SLIPPAGE)
                                     qty_1 = round(tgt_amt / actual_est_ep_1)
                                     if qty_1 * actual_est_ep_1 > current_cash: 
@@ -700,7 +735,6 @@ if run_button:
                                         
                                 qty_2 = 0
                                 if buy_price_2 > 0:
-                                    # 💡 슬리피지 수량 보정
                                     actual_est_ep_2 = buy_price_2 * (1 + SLIPPAGE)
                                     qty_2 = round(tgt_amt / actual_est_ep_2)
                                     if qty_2 * actual_est_ep_2 > current_cash:
@@ -735,7 +769,6 @@ if run_button:
                             rsi_target_amt = current_rsi_budget / RSI_SPLIT if RSI_SPLIT > 0 else 0
                             
                             if soxl_rsi_buy_price > 0:
-                                # 💡 슬리피지 수량 보정
                                 actual_est_ep_rsi = soxl_rsi_buy_price * (1 + SLIPPAGE)
                                 rsi_qty = round(rsi_target_amt / actual_est_ep_rsi)
                                 if rsi_qty * actual_est_ep_rsi > current_cash:
