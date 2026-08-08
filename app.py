@@ -3,93 +3,108 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import math
-import json
+import requests
 from datetime import date, timedelta
-from streamlit_local_storage import LocalStorage
+
+# 🚨 여기에 방금 kvdb.io 에서 발급받은 주소를 붙여넣으세요! (끝에 슬래시 / 없이)
+KVDB_URL = "https://kvdb.io/RNBYoRrQqa3CotY4QTvMtW"
 
 # --- 페이지 기본 설정 (모바일 최적화) ---
 st.set_page_config(page_title="SOLID: Soxl Hybrid Strategy", layout="wide", initial_sidebar_state="collapsed")
 st.title("SOLID: Soxl Hybrid Strategy")
 
-# --- 모바일 '당겨서 새로고침' 방지 CSS ---
-st.markdown("""
-    <style>
-        body, .stApp { overscroll-behavior-y: none; }
-    </style>
-""", unsafe_allow_html=True)
+# 스크롤 튕김 현상 방지
+st.markdown("<style>body, .stApp { overscroll-behavior-y: none; }</style>", unsafe_allow_html=True)
 
-# --- 세션 상태 초기화 (자본 출입 기록용) ---
+# --- 세션 상태 초기화 (초기값 세팅) ---
 if 'capital_flows' not in st.session_state:
     st.session_state['capital_flows'] = []
+if 'run_backtest' not in st.session_state:
+    st.session_state['run_backtest'] = False
 
-# --- 로컬 스토리지 초기화 및 데이터 로드 ---
-localS = LocalStorage()
-saved_data = localS.getItem("solid_config")
+default_params = {
+    "start": date(2026, 6, 30), "cash": 100000.0, "slippage": 0.1,
+    "x_frac": 35.0, "k_frac": 12.5, "c_limit": 7, "tp_rate": 6.0,
+    "buy0": 5.0, "buy1": -1.0, "buy2": -10.0, "moc": 24,
+    "rsi_buy": 22.0, "rsi_sell": 25.0, "rsi_split": 2, "rsi_moc": 10
+}
 
-config = {}
-if saved_data:
-    try:
-        # 라이브러리 반환 형태(문자열 또는 딕셔너리)에 맞게 예외 처리
-        if isinstance(saved_data, str):
-            config = json.loads(saved_data)
+for k, v in default_params.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+# --- ☁️ 클라우드 설정 동기화 (최상단 배치) ---
+st.markdown("### ☁️ 클라우드 설정 동기화")
+st.info("닉네임을 입력하고 설정을 클라우드에 영구 저장하세요. 기기를 바꿔도 언제든 불러올 수 있습니다.")
+
+col_id, col_btn1, col_btn2 = st.columns([2, 1, 1])
+with col_id:
+    user_id = st.text_input("고유 닉네임 (영문/숫자 조합 권장)", placeholder="예: quant_master_01")
+with col_btn1:
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("💾 내 설정 저장", use_container_width=True):
+        if not user_id:
+            st.warning("닉네임을 먼저 입력해주세요.")
         else:
-            config = saved_data
-    except:
-        pass
+            save_data = {
+                "start": st.session_state['start'].strftime("%Y-%m-%d"),
+                "cash": st.session_state['cash'], "slippage": st.session_state['slippage'],
+                "x_frac": st.session_state['x_frac'], "k_frac": st.session_state['k_frac'],
+                "c_limit": st.session_state['c_limit'], "tp_rate": st.session_state['tp_rate'],
+                "buy0": st.session_state['buy0'], "buy1": st.session_state['buy1'],
+                "buy2": st.session_state['buy2'], "moc": st.session_state['moc'],
+                "rsi_buy": st.session_state['rsi_buy'], "rsi_sell": st.session_state['rsi_sell'],
+                "rsi_split": st.session_state['rsi_split'], "rsi_moc": st.session_state['rsi_moc']
+            }
+            try:
+                requests.post(f"{KVDB_URL}/{user_id}", json=save_data)
+                st.success("클라우드 저장 완료!")
+            except:
+                st.error("저장 실패. 인터넷 연결을 확인하세요.")
 
-def get_param(param_name, default_val, cast_type):
-    # 1. URL 파라미터 우선 (URL로 공유된 맞춤 세팅 우선 적용)
-    val = st.query_params.get(param_name)
-    if val is not None:
-        try: return cast_type(val)
-        except: pass
-    
-    # 2. 로컬 스토리지 (기기 내부 쿠키) 확인
-    if param_name in config:
-        try:
-            if cast_type == date.fromisoformat:
-                return date.fromisoformat(config[param_name])
-            return cast_type(config[param_name])
-        except: pass
-        
-    # 3. 모두 없으면 기본값 반환
-    return default_val
+with col_btn2:
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("🔄 불러오기", use_container_width=True):
+        if not user_id:
+            st.warning("닉네임을 먼저 입력해주세요.")
+        else:
+            try:
+                resp = requests.get(f"{KVDB_URL}/{user_id}")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    st.session_state['start'] = date.fromisoformat(data.get("start", "2026-06-30"))
+                    st.session_state['cash'] = data.get("cash", 100000.0)
+                    st.session_state['slippage'] = data.get("slippage", 0.1)
+                    st.session_state['x_frac'] = data.get("x_frac", 35.0)
+                    st.session_state['k_frac'] = data.get("k_frac", 12.5)
+                    st.session_state['c_limit'] = data.get("c_limit", 7)
+                    st.session_state['tp_rate'] = data.get("tp_rate", 6.0)
+                    st.session_state['buy0'] = data.get("buy0", 5.0)
+                    st.session_state['buy1'] = data.get("buy1", -1.0)
+                    st.session_state['buy2'] = data.get("buy2", -10.0)
+                    st.session_state['moc'] = data.get("moc", 24)
+                    st.session_state['rsi_buy'] = data.get("rsi_buy", 22.0)
+                    st.session_state['rsi_sell'] = data.get("rsi_sell", 25.0)
+                    st.session_state['rsi_split'] = data.get("rsi_split", 2)
+                    st.session_state['rsi_moc'] = data.get("rsi_moc", 10)
+                    st.rerun()
+                else:
+                    st.error("해당 닉네임으로 저장된 설정이 없습니다.")
+            except:
+                st.error("불러오기 실패. 인터넷 연결을 확인하세요.")
 
-# --- 초기 파라미터 세팅 ---
-default_start = get_param("start", date(2026, 6, 30), date.fromisoformat)
-default_cash = get_param("cash", 100000.0, float)
-default_slippage = get_param("slippage", 0.1, float)
-
-default_x_frac = get_param("x_frac", 35.0, float)
-default_k_frac = get_param("k_frac", 12.5, float)
-default_c_limit = get_param("c_limit", 7, int)
-default_tp_rate = get_param("tp_rate", 6.0, float)
-
-default_buy0 = get_param("buy0", 5.0, float)
-default_buy1 = get_param("buy1", -1.0, float)
-default_buy2 = get_param("buy2", -10.0, float)
-default_moc = get_param("moc", 24, int)
-
-default_rsi_buy = get_param("rsi_buy", 22.0, float)
-default_rsi_sell = get_param("rsi_sell", 25.0, float)
-default_rsi_split = get_param("rsi_split", 2, int)
-default_rsi_moc = get_param("rsi_moc", 10, int)
-
+st.markdown("---")
 
 # 1. 기본 설정 및 입출금 기록
 with st.expander("📝 1. 기본 설정 및 입출금 기록 (터치하여 열기)", expanded=True):
     col1, col2 = st.columns(2)
     with col1:
-        start_date = st.date_input("백테스트 시작일", default_start)
-        INIT_CASH = st.number_input("초기 자본 ($)", min_value=1000.0, value=default_cash, step=1000.0)
+        start_date = st.date_input("백테스트 시작일", key="start")
+        INIT_CASH = st.number_input("초기 자본 ($)", min_value=1000.0, step=1000.0, key="cash")
     with col2:
         end_date = st.date_input("오늘(종료일)", date.today())
-        ui_slippage = st.number_input("슬리피지 (%)", value=default_slippage, step=0.05, help="매수/매도 체결 시 발생하는 호가 오차 (기본 0.1%)")
+        ui_slippage = st.number_input("슬리피지 (%)", step=0.05, key="slippage", help="매수/매도 체결 시 호가 오차")
         
-    st.query_params["start"] = start_date.strftime("%Y-%m-%d")
-    st.query_params["cash"] = INIT_CASH
-    st.query_params["slippage"] = ui_slippage
-    
     st.markdown("---")
     st.markdown("**💰 추가 입출금 내역 (자본 출입)**")
     
@@ -112,70 +127,36 @@ with st.expander("📝 1. 기본 설정 및 입출금 기록 (터치하여 열�
             st.session_state['capital_flows'] = []
             st.rerun()
 
-# 2. 하이브리드 전략 파라미터 설정 및 영구 저장
+# 2. 하이브리드 전략 파라미터 설정
 with st.expander("⚙️ 2. 하이브리드 전략 파라미터 설정 (고급)", expanded=False):
     st.markdown("##### 📌 Main 전략 설정")
     p_col1, p_col2 = st.columns(2)
     with p_col1:
-        ui_x_frac = st.number_input("초기 진입 비중 (%)", value=default_x_frac, step=1.0, help="Main 전략의 첫 진입 자산 비중")
-        ui_k_frac = st.number_input("추가 매수 비중 (%)", value=default_k_frac, step=0.5, help="투입된 자금 대비 1회 물타기 비중")
-        ui_c_limit = st.number_input("추가 매수 횟수 (회)", value=default_c_limit, step=1, help="Main 전략의 최대 물타기 허용 횟수")
-        ui_tp_rate = st.number_input("익절율 (%)", value=default_tp_rate, step=0.5, help="마지막 매수 체결가 대비 목표 수익률")
+        ui_x_frac = st.number_input("초기 진입 비중 (%)", step=1.0, key="x_frac")
+        ui_k_frac = st.number_input("추가 매수 비중 (%)", step=0.5, key="k_frac")
+        ui_c_limit = st.number_input("추가 매수 횟수 (회)", step=1, key="c_limit")
+        ui_tp_rate = st.number_input("익절율 (%)", step=0.5, key="tp_rate")
     with p_col2:
-        ui_buy0 = st.number_input("매수0 경계 (%)", value=default_buy0, step=0.5, help="첫 진입 시 전일 종가 대비 LOC 위치 (기본 5%)")
-        ui_buy1 = st.number_input("매수1 경계 (%)", value=default_buy1, step=0.5, help="1차 물타기 시 전일 종가 대비 LOC 위치 (기본 -1%)")
-        ui_buy2 = st.number_input("매수2 경계 (%)", value=default_buy2, step=0.5, help="2차 물타기 시 전일 종가 대비 LOC 위치 (기본 -10%)")
-        ui_moc = st.number_input("MOC (최대 보유일)", value=default_moc, step=1, help="Main 전략 진입 후 강제 청산 기한 (기본 24일)")
+        ui_buy0 = st.number_input("매수0 경계 (%)", step=0.5, key="buy0")
+        ui_buy1 = st.number_input("매수1 경계 (%)", step=0.5, key="buy1")
+        ui_buy2 = st.number_input("매수2 경계 (%)", step=0.5, key="buy2")
+        ui_moc = st.number_input("MOC (최대 보유일)", step=1, key="moc")
 
     st.markdown("---")
     st.markdown("##### 📌 RSI 전략 설정")
     p_col3, p_col4 = st.columns(2)
     with p_col3:
-        ui_rsi_buy = st.number_input("RSI 매수 기준", value=default_rsi_buy, step=1.0, help="RSI가 이 수치 이하일 때 진입 (기본 22)")
-        ui_rsi_split = st.number_input("RSI 분할 횟수 (회)", value=default_rsi_split, step=1, help="RSI 할당 예산 분할 진입 횟수 (기본 2)")
+        ui_rsi_buy = st.number_input("RSI 매수 기준", step=1.0, key="rsi_buy")
+        ui_rsi_split = st.number_input("RSI 분할 횟수 (회)", step=1, key="rsi_split")
     with p_col4:
-        ui_rsi_sell = st.number_input("RSI 매도 기준", value=default_rsi_sell, step=1.0, help="RSI가 이 수치 이상일 때 익절 (기본 25)")
-        ui_rsi_moc = st.number_input("RSI MOC (최대 보유일)", value=default_rsi_moc, step=1, help="RSI 전략 진입 후 강제 청산 기한 (기본 10일)")
-        
-    st.query_params["x_frac"] = ui_x_frac
-    st.query_params["k_frac"] = ui_k_frac
-    st.query_params["c_limit"] = ui_c_limit
-    st.query_params["tp_rate"] = ui_tp_rate
-    st.query_params["buy0"] = ui_buy0
-    st.query_params["buy1"] = ui_buy1
-    st.query_params["buy2"] = ui_buy2
-    st.query_params["moc"] = ui_moc
-    st.query_params["rsi_buy"] = ui_rsi_buy
-    st.query_params["rsi_sell"] = ui_rsi_sell
-    st.query_params["rsi_split"] = ui_rsi_split
-    st.query_params["rsi_moc"] = ui_rsi_moc
+        ui_rsi_sell = st.number_input("RSI 매도 기준", step=1.0, key="rsi_sell")
+        ui_rsi_moc = st.number_input("RSI MOC (최대 보유일)", step=1, key="rsi_moc")
 
-    st.markdown("---")
-    # 💡 [핵심] 설정 영구 저장 전용 버튼 분리 배치
-    if st.button("💾 현재 설정 스마트폰에 영구 저장", use_container_width=True):
-        current_config = {
-            "start": start_date.strftime("%Y-%m-%d"),
-            "cash": INIT_CASH,
-            "slippage": ui_slippage,
-            "x_frac": ui_x_frac,
-            "k_frac": ui_k_frac,
-            "c_limit": ui_c_limit,
-            "tp_rate": ui_tp_rate,
-            "buy0": ui_buy0,
-            "buy1": ui_buy1,
-            "buy2": ui_buy2,
-            "moc": ui_moc,
-            "rsi_buy": ui_rsi_buy,
-            "rsi_sell": ui_rsi_sell,
-            "rsi_split": ui_rsi_split,
-            "rsi_moc": ui_rsi_moc
-        }
-        localS.setItem("solid_config", json.dumps(current_config))
-        st.success("✅ 설정이 성공적으로 저장되었습니다! 앱을 다시 켜도 이 설정이 유지됩니다.")
-
-st.markdown("<br>", unsafe_allow_html=True)
-# 💡 [핵심] 순수하게 백테스트만 실행하는 메인 엔진 구동 버튼
+# 💡 순수 백테스트 실행 버튼
 run_button = st.button("🚀 매매표 생성 및 백테스트 실행", type="primary", use_container_width=True)
+
+if run_button:
+    st.session_state['run_backtest'] = True
 
 # --- 보조지표 계산 함수 ---
 def calculate_rsi_components(series, period=2):
@@ -270,7 +251,7 @@ def to_pct_2_decimals(val):
     return val
 
 # --- 메인 실행 로직 ---
-if run_button:
+if st.session_state.get('run_backtest', False):
     if start_date >= end_date:
         st.error("종료일이 시작일보다 빠를 수 없습니다.")
     else:
@@ -594,9 +575,6 @@ if run_button:
                     
                     tab1, tab2, tab3 = st.tabs(["📊 백테스트 및 누적 매매 일지", "🛒 오늘의 실전 LOC 매매표", "📅 연도별/월별 상세 성과"])
                     
-                    # ----------------------------------------
-                    # [Tab 1] 기존 백테스트 및 누적 일지
-                    # ----------------------------------------
                     with tab1:
                         final_asset = df_records.iloc[-1]['총 자산(Equity)']
                         final_cash = df_records.iloc[-1]['예수금(Cash)']
@@ -656,9 +634,6 @@ if run_button:
                         
                         st.dataframe(styled_df, use_container_width=True, height=500, hide_index=True, column_order=ordered_columns)
 
-                    # ----------------------------------------
-                    # [Tab 2] 실전 LOC 주문표
-                    # ----------------------------------------
                     with tab2:
                         st.subheader("🚨 오늘 밤 미국 장 LOC 주문표")
                         
@@ -813,9 +788,6 @@ if run_button:
                             else:
                                 st.write("- 매도 주문 없음")
 
-                    # ----------------------------------------
-                    # [Tab 3] 연도별/월별 상세 성과 (매트릭스 탭)
-                    # ----------------------------------------
                     with tab3:
                         st.subheader("📅 연도별/월별 상세 성과 매트릭스")
                         
