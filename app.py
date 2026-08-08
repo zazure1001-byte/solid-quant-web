@@ -16,7 +16,6 @@ if 'capital_flows' not in st.session_state:
 # --- 구역 A: 사용자 입력부 (URL 맞춤형 파라미터 적용) ---
 query_params = st.query_params
 
-# URL 기존 설정값 불러오기
 default_start_str = query_params.get("start", "2025-01-01")
 try: default_start = date.fromisoformat(default_start_str)
 except: default_start = date(2025, 1, 1)
@@ -24,7 +23,9 @@ except: default_start = date(2025, 1, 1)
 try: default_cash = float(query_params.get("cash", 100000.0))
 except: default_cash = 100000.0
 
-# 전략 파라미터 URL 불러오기
+try: default_slippage = float(query_params.get("slippage", 0.1))
+except: default_slippage = 0.1
+
 try: default_x_frac = float(query_params.get("x_frac", 35.0))
 except: default_x_frac = 35.0
 
@@ -70,9 +71,11 @@ with st.expander("📝 1. 기본 설정 및 입출금 기록 (터치하여 열�
         INIT_CASH = st.number_input("초기 자본 ($)", min_value=1000.0, value=default_cash, step=1000.0)
     with col2:
         end_date = st.date_input("오늘(종료일)", date.today())
+        ui_slippage = st.number_input("슬리피지 (%)", value=default_slippage, step=0.05, help="매수/매도 체결 시 발생하는 호가 오차 (기본 0.1%)")
         
     st.query_params["start"] = start_date.strftime("%Y-%m-%d")
     st.query_params["cash"] = INIT_CASH
+    st.query_params["slippage"] = ui_slippage
     
     st.markdown("---")
     st.markdown("**💰 추가 입출금 내역 (자본 출입)**")
@@ -149,7 +152,7 @@ def calculate_rsi_components(series, period=2):
     return rsi, ema_up, ema_down
 
 # --- 데이터 로드 함수 ---
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=3600)
 def load_market_data(start, end):
     data_start = start - timedelta(days=90)
     data_end = end + timedelta(days=1)
@@ -157,6 +160,9 @@ def load_market_data(start, end):
     df_soxl = yf.download("SOXL", start=data_start, end=data_end, auto_adjust=True, progress=False)
     df_soxx = yf.download("SOXX", start=data_start, end=data_end, auto_adjust=True, progress=False)
     
+    if df_soxl.empty or df_soxx.empty or 'Close' not in df_soxl.columns:
+        return pd.DataFrame()
+        
     if isinstance(df_soxl.columns, pd.MultiIndex):
         df_soxl.columns = df_soxl.columns.get_level_values(0)
         df_soxx.columns = df_soxx.columns.get_level_values(0)
@@ -233,6 +239,11 @@ if run_button:
     else:
         with st.spinner("시장 데이터 동기화 및 기록장 작성 중..."):
             df = load_market_data(start_date, end_date)
+            
+            if df.empty:
+                st.error("데이터를 불러오지 못했습니다. 네트워크 또는 야후 파이낸스 연결을 확인하세요.")
+                st.stop()
+                
             trade_start_idx = df.index.searchsorted(pd.to_datetime(start_date))
             
             if trade_start_idx >= len(df):
@@ -252,8 +263,9 @@ if run_button:
                 RSI_SPLIT = int(ui_rsi_split)
                 RSI_MOC = int(ui_rsi_moc)
                 
+                SLIPPAGE = ui_slippage / 100.0     
+                
                 EXH_TP = 0.03      
-                SLIPPAGE = 0.0     
                 RSI_FRAC = 0.30    
                 
                 flows_dict = {}
@@ -275,15 +287,18 @@ if run_button:
                 latest_rsi_budget = INIT_CASH * RSI_FRAC
                 active_rsi_budget = 0.0
                 
+                nav_index = 100.0
+                prev_equity = INIT_CASH
+                max_nav = 100.0
+                
                 current_year = -1
-                year_max_equity = INIT_CASH
+                year_max_nav = 100.0
                 
                 trade_count_main, trade_count_rsi = 0, 0
                 main_win_count, main_loss_count = 0, 0
                 rsi_win_count, rsi_loss_count = 0, 0
                 
                 daily_records = []
-                max_equity = INIT_CASH
 
                 for i in range(trade_start_idx, len(df)):
                     current_date = df.index[i].date()
@@ -305,17 +320,6 @@ if run_button:
                     prev_soxx_close = float(df['SOXX_Close'].iloc[i-1]) if i > 0 else float(df['SOXX_Close'].iloc[i])
                     
                     curr_soxx_rsi = float(df['SOXX_RSI'].iloc[i])
-                    
-                    total_equity = cash + (main_shares + rsi_shares) * curr_soxl
-                    if total_equity > max_equity: max_equity = total_equity
-                    current_dd = ((total_equity / max_equity) - 1) * 100
-                    
-                    if current_date.year != current_year:
-                        current_year = current_date.year
-                        year_max_equity = total_equity
-                    if total_equity > year_max_equity:
-                        year_max_equity = total_equity
-                    current_ydd = ((total_equity / year_max_equity) - 1) * 100
 
                     sell_main, sell_rsi = False, False
                     today_main_sell_date, today_main_profit, today_main_profit_rate = "", "", ""
@@ -385,15 +389,16 @@ if run_button:
                         if main_shares == 0:
                             loc_limit_price = prev_soxl * (1 + BUY0_MARGIN)
                             if curr_soxl <= loc_limit_price:
-                                cycle_base_equity = total_equity
-                                latest_rsi_budget = total_equity * RSI_FRAC
-                                cycle_initial_buy_amt = total_equity * X_FRAC
+                                temp_equity = cash + rsi_shares * curr_soxl
+                                cycle_base_equity = temp_equity
+                                latest_rsi_budget = temp_equity * RSI_FRAC
+                                cycle_initial_buy_amt = temp_equity * X_FRAC
                                 
                                 buy_qty = round(cycle_initial_buy_amt / loc_limit_price)
                                 
                                 actual_ep = curr_soxl * (1 + SLIPPAGE)
                                 if buy_qty * actual_ep > cash: 
-                                    buy_qty = math.floor(cash / actual_ep)
+                                    buy_qty = max(0, math.floor(cash / actual_ep))
 
                                 if buy_qty > 0:
                                     cost = buy_qty * actual_ep
@@ -412,7 +417,7 @@ if run_button:
 
                                 if curr_soxl <= loc_lim_1 and main_add_buy_count < C_LIMIT:
                                     qty = round(tgt / loc_lim_1) 
-                                    if qty * actual_ep > cash: qty = math.floor(cash / actual_ep)
+                                    if qty * actual_ep > cash: qty = max(0, math.floor(cash / actual_ep))
                                     if qty > 0:
                                         cost = qty * actual_ep
                                         main_shares += qty
@@ -423,7 +428,7 @@ if run_button:
                                 
                                 if curr_soxl <= loc_lim_2 and main_add_buy_count < C_LIMIT:
                                     qty = round(tgt / loc_lim_2) 
-                                    if qty * actual_ep > cash: qty = math.floor(cash / actual_ep)
+                                    if qty * actual_ep > cash: qty = max(0, math.floor(cash / actual_ep))
                                     if qty > 0:
                                         cost = qty * actual_ep
                                         main_shares += qty
@@ -436,7 +441,8 @@ if run_button:
                         if curr_soxx_rsi <= RSI_BUY and rsi_buy_count < RSI_SPLIT:
                             if rsi_buy_count == 0: 
                                 if main_shares == 0:
-                                    active_rsi_budget = total_equity * RSI_FRAC
+                                    temp_equity = cash + rsi_shares * curr_soxl
+                                    active_rsi_budget = temp_equity * RSI_FRAC
                                 else:
                                     active_rsi_budget = latest_rsi_budget
                             
@@ -453,7 +459,7 @@ if run_button:
                                 
                             actual_ep = curr_soxl * (1 + SLIPPAGE)
                             if buy_qty * actual_ep > cash: 
-                                buy_qty = math.floor(cash / actual_ep)
+                                buy_qty = max(0, math.floor(cash / actual_ep))
 
                             if buy_qty > 0:
                                 cost = buy_qty * actual_ep
@@ -464,6 +470,28 @@ if run_button:
                                 if rsi_buy_count == 1: rsi_holding_days = 0
 
                     final_equity = cash + (main_shares + rsi_shares) * curr_soxl
+                    
+                    adjusted_prev = prev_equity + flow_today
+                    if adjusted_prev > 0:
+                        daily_ret = (final_equity - adjusted_prev) / adjusted_prev
+                    else:
+                        daily_ret = 0.0
+                    
+                    nav_index *= (1 + daily_ret)
+                    prev_equity = final_equity
+                    
+                    if nav_index > max_nav: max_nav = nav_index
+                    current_dd = ((nav_index / max_nav) - 1) * 100
+                    
+                    if current_date.year != current_year:
+                        current_year = current_date.year
+                        year_max_nav = nav_index
+                    if nav_index > year_max_nav:
+                        year_max_nav = nav_index
+                    current_ydd = ((nav_index / year_max_nav) - 1) * 100
+                    
+                    asset_return = ((nav_index / 100.0) - 1) * 100
+                    
                     current_progress = 0 if main_shares == 0 else main_add_buy_count + 1
                     cum_realized += today_realized_profit
                     disp_realized = today_realized_profit if (today_main_sell_date or today_rsi_sell_date) else ""
@@ -472,7 +500,6 @@ if run_button:
                     if main_shares > 0: unrealized += (main_shares * curr_soxl) - main_cycle_invested
                     if rsi_shares > 0: unrealized += (rsi_shares * curr_soxl) - rsi_invested
                     
-                    asset_return = ((final_equity / total_net_investment) - 1) * 100 if total_net_investment > 0 else 0
                     cash_ratio = (cash / final_equity) * 100 if final_equity > 0 else 0
                     
                     if main_shares == 0:
@@ -519,7 +546,8 @@ if run_button:
                         "현금 비중 (%)": cash_ratio,
                         "입출금": flow_today if flow_today != 0 else "",
                         "예수금(Cash)": cash,
-                        "총 자산(Equity)": final_equity
+                        "총 자산(Equity)": final_equity,
+                        "NAV": nav_index
                     })
 
                 if not daily_records:
@@ -535,8 +563,10 @@ if run_button:
                     with tab1:
                         final_asset = df_records.iloc[-1]['총 자산(Equity)']
                         final_cash = df_records.iloc[-1]['예수금(Cash)']
+                        final_nav = df_records.iloc[-1]['NAV']
+                        
                         years = len(df_records) / 252 if len(df_records) > 252 else max(len(df_records) / 252, 0.1)
-                        cagr = ((final_asset / total_net_investment) ** (1/years) - 1) * 100 if years > 0 and total_net_investment > 0 else 0
+                        cagr = ((final_nav / 100.0) ** (1/years) - 1) * 100 if years > 0 else 0
                         mdd = df_records['DD (%)'].min()
                         win_rate = (main_win_count / (main_win_count + main_loss_count) * 100) if (main_win_count + main_loss_count) > 0 else 0
                         
@@ -642,9 +672,11 @@ if run_button:
                         if main_shares == 0:
                             buy_price = last_soxl_close * (1 + BUY0_MARGIN)
                             if buy_price > 0:
-                                buy_qty = round(disp_init / buy_price)
-                                if buy_qty * buy_price > current_cash: 
-                                    buy_qty = math.floor(current_cash / buy_price)
+                                # 💡 슬리피지 수량 보정
+                                actual_est_ep = buy_price * (1 + SLIPPAGE)
+                                buy_qty = round(disp_init / actual_est_ep)
+                                if buy_qty * actual_est_ep > current_cash: 
+                                    buy_qty = math.floor(current_cash / actual_est_ep)
                                 
                                 if buy_qty > 0:
                                     order_list.append({
@@ -660,15 +692,19 @@ if run_button:
                                 
                                 qty_1 = 0
                                 if buy_price_1 > 0:
-                                    qty_1 = round(tgt_amt / buy_price_1)
-                                    if qty_1 * buy_price_1 > current_cash: 
-                                        qty_1 = math.floor(current_cash / buy_price_1)
+                                    # 💡 슬리피지 수량 보정
+                                    actual_est_ep_1 = buy_price_1 * (1 + SLIPPAGE)
+                                    qty_1 = round(tgt_amt / actual_est_ep_1)
+                                    if qty_1 * actual_est_ep_1 > current_cash: 
+                                        qty_1 = math.floor(current_cash / actual_est_ep_1)
                                         
                                 qty_2 = 0
                                 if buy_price_2 > 0:
-                                    qty_2 = round(tgt_amt / buy_price_2)
-                                    if qty_2 * buy_price_2 > current_cash:
-                                        qty_2 = math.floor(current_cash / buy_price_2)
+                                    # 💡 슬리피지 수량 보정
+                                    actual_est_ep_2 = buy_price_2 * (1 + SLIPPAGE)
+                                    qty_2 = round(tgt_amt / actual_est_ep_2)
+                                    if qty_2 * actual_est_ep_2 > current_cash:
+                                        qty_2 = math.floor(current_cash / actual_est_ep_2)
                                 
                                 if qty_1 > 0:
                                     order_list.append({
@@ -699,9 +735,11 @@ if run_button:
                             rsi_target_amt = current_rsi_budget / RSI_SPLIT if RSI_SPLIT > 0 else 0
                             
                             if soxl_rsi_buy_price > 0:
-                                rsi_qty = round(rsi_target_amt / soxl_rsi_buy_price)
-                                if rsi_qty * soxl_rsi_buy_price > current_cash:
-                                    rsi_qty = math.floor(current_cash / soxl_rsi_buy_price)
+                                # 💡 슬리피지 수량 보정
+                                actual_est_ep_rsi = soxl_rsi_buy_price * (1 + SLIPPAGE)
+                                rsi_qty = round(rsi_target_amt / actual_est_ep_rsi)
+                                if rsi_qty * actual_est_ep_rsi > current_cash:
+                                    rsi_qty = math.floor(current_cash / actual_est_ep_rsi)
                                     
                                 if rsi_qty > 0:
                                     order_list.append({
@@ -743,23 +781,22 @@ if run_button:
                                 st.write("- 매도 주문 없음")
 
                     # ----------------------------------------
-                    # [Tab 3] 연도별/월별 상세 성과 (매트릭스 탭 - 구조 변경 적용)
+                    # [Tab 3] 연도별/월별 상세 성과 (매트릭스 탭)
                     # ----------------------------------------
                     with tab3:
                         st.subheader("📅 연도별/월별 상세 성과 매트릭스")
                         
-                        # 데이터 전처리
                         df_t3 = df_records.copy()
                         df_t3['거래일'] = pd.to_datetime(df_t3['거래일'])
                         df_t3['Year'] = df_t3['거래일'].dt.year
                         df_t3['Month'] = df_t3['거래일'].dt.month
                         
-                        daily_equity_series = df_t3.set_index('거래일')['총 자산(Equity)']
+                        daily_nav_series = df_t3.set_index('거래일')['NAV']
                         
-                        monthly_end = daily_equity_series.resample('ME').last()
+                        monthly_nav = daily_nav_series.resample('ME').last()
                         first_day_idx = df_t3['거래일'].iloc[0] - pd.Timedelta(days=1)
-                        monthly_equity = pd.concat([pd.Series({first_day_idx: INIT_CASH}), monthly_end])
-                        monthly_ret = monthly_equity.pct_change().dropna() * 100
+                        monthly_nav_with_base = pd.concat([pd.Series({first_day_idx: 100.0}), monthly_nav])
+                        monthly_ret = monthly_nav_with_base.pct_change().dropna() * 100
                         
                         monthly_df = pd.DataFrame({'Return': monthly_ret})
                         monthly_df['Year'] = monthly_df.index.year
@@ -770,9 +807,9 @@ if run_button:
                             if m not in pivot_ret.columns: pivot_ret[m] = np.nan
                         pivot_ret = pivot_ret[list(range(1, 13))]
                         
-                        yearly_end = daily_equity_series.resample('YE').last()
-                        yearly_equity = pd.concat([pd.Series({first_day_idx: INIT_CASH}), yearly_end])
-                        yearly_ret = yearly_equity.pct_change().dropna() * 100
+                        yearly_nav = daily_nav_series.resample('YE').last()
+                        yearly_nav_with_base = pd.concat([pd.Series({first_day_idx: 100.0}), yearly_nav])
+                        yearly_ret = yearly_nav_with_base.pct_change().dropna() * 100
                         
                         yearly_stats = []
                         for y in df_t3['Year'].unique():
@@ -781,7 +818,10 @@ if run_button:
                             y_avg_dd = y_df['DD (%)'].mean()
                             y_avg_cash = y_df['현금 비중 (%)'].mean()
                             y_asset = y_df['총 자산(Equity)'].iloc[-1]
-                            y_r = yearly_ret[yearly_ret.index.year == y].iloc[0] if y in yearly_ret.index.year else 0
+                            
+                            mask = yearly_ret.index.year == y
+                            y_r = yearly_ret[mask].iloc[0] if mask.any() else 0.0
+                            
                             yearly_stats.append({
                                 '연도': y, '자산': y_asset, '수익률': y_r, 
                                 'MDD': y_mdd, 'avg DD': y_avg_dd, 'avg Cash': y_avg_cash
@@ -810,9 +850,6 @@ if run_button:
                         dd_30 = (df_t3['DD (%)'] <= -30.0).mean() * 100
                         dd_40 = (df_t3['DD (%)'] <= -40.0).mean() * 100
 
-                        # --- 요청하신 구조 반영 (위에서 아래로 순차 배치) ---
-                        
-                        # 1. 최상단: 전체 요약 지표 가로 배치 (행/열 변환)
                         st.markdown("##### 📌 전체 성과 요약")
                         summary_horizontal = {
                             "시작일": [start_date.strftime('%y.%m.%d')],
@@ -830,7 +867,6 @@ if run_button:
                         
                         st.markdown("---")
 
-                        # 2. 그 아래: 연도별 성과
                         st.markdown("##### 📌 연도별 성과")
                         st.dataframe(df_yearly.style.format({
                             '자산': "${:,.0f}", '수익률': "{:.2f}%", 'MDD': "{:.2f}%", 
@@ -839,7 +875,6 @@ if run_button:
                         
                         st.markdown("---")
 
-                        # 3. 그 아래: 세부 통계 표 3개 가로 나란히 배치
                         st.markdown("##### 📌 상세 통계 및 전략 분석")
                         c_stat1, c_stat2, c_stat3 = st.columns(3)
                         
@@ -855,7 +890,7 @@ if run_button:
                             st.markdown("**전략 승률**")
                             df_win_stat = pd.DataFrame({
                                 "구분": [f"Main 승률", "└ 익절", "└ 손절", f"RSI 승률", "└ 익절", "└ 손절"],
-                                "결과": [f"{m_win_rate:.2f}%", main_win_count, main_loss_count, f"{r_win_rate:.2f}%", rsi_win_count, rsi_loss_count]
+                                "결과": [f"{m_win_rate:.2f}%", str(main_win_count), str(main_loss_count), f"{r_win_rate:.2f}%", str(rsi_win_count), str(rsi_loss_count)]
                             })
                             st.dataframe(df_win_stat, hide_index=True, use_container_width=True)
                             
@@ -869,7 +904,6 @@ if run_button:
 
                         st.markdown("---")
 
-                        # 4. 맨 아래: 월별 성과 매트릭스
                         st.markdown("##### 📌 월별 성과 매트릭스 (%)")
                         st.dataframe(pivot_ret.style.format("{:.2f}%", na_rep="")
                                      .map(color_profit), use_container_width=True)
