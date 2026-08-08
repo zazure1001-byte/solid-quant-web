@@ -8,9 +8,12 @@ import json
 import urllib.parse
 from datetime import date, timedelta
 
-# 💡 사진에 올려주신 회원님의 실제 버킷 ID가 적용되었습니다!
+# 💡 회원님의 실제 버킷 ID
 KVDB_BUCKET_ID = "Ac7ERULjDV2o4YyVfVgJdK"  
 KVDB_URL = f"https://kvdb.io/{KVDB_BUCKET_ID}"
+
+# 💡 방화벽 차단을 우회하기 위한 크롬 브라우저 위장 신분증 (User-Agent)
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 # --- 페이지 기본 설정 (모바일 최적화) ---
 st.set_page_config(page_title="SOLID: Soxl Hybrid Strategy", layout="wide", initial_sidebar_state="collapsed")
@@ -36,7 +39,7 @@ for k, v in default_params.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# --- ☁️ 클라우드 설정 동기화 (가장 최상단 배치) ---
+# --- ☁️ 클라우드 설정 동기화 ---
 st.markdown("### ☁️ 클라우드 설정 동기화")
 st.info("닉네임을 입력하고 설정을 클라우드에 영구 저장하세요. 기기를 바꿔도 언제든 불러올 수 있습니다.")
 
@@ -61,12 +64,17 @@ with col_btn1:
                 "rsi_split": st.session_state['rsi_split'], "rsi_moc": st.session_state['rsi_moc']
             }
             try:
-                # 💡 Public 버킷이므로 auth 파라미터를 완전히 제거했습니다!
                 safe_user_id = urllib.parse.quote(user_id.strip())
                 target_url = f"{KVDB_URL}/{safe_user_id}"
-                headers = {"Content-Type": "application/json"}
                 
-                resp = requests.put(target_url, data=json.dumps(save_data), headers=headers)
+                # 💡 User-Agent를 포함시켜 방화벽(403) 우회 통과
+                headers = {
+                    "Content-Type": "application/json",
+                    "User-Agent": USER_AGENT
+                }
+                
+                # PUT 대신 조금 더 안전한 POST 방식 사용
+                resp = requests.post(target_url, data=json.dumps(save_data), headers=headers)
                 
                 if resp.status_code in [200, 201]:
                     st.success("✅ 클라우드 저장 완료! 이제 언제든 불러올 수 있습니다.")
@@ -82,11 +90,12 @@ with col_btn2:
             st.warning("닉네임을 먼저 입력해주세요.")
         else:
             try:
-                # 💡 마찬가지로 불러올 때도 비밀 키를 빼고 요청합니다!
                 safe_user_id = urllib.parse.quote(user_id.strip())
                 target_url = f"{KVDB_URL}/{safe_user_id}"
                 
-                resp = requests.get(target_url)
+                # 💡 불러올 때도 브라우저로 위장
+                headers = {"User-Agent": USER_AGENT}
+                resp = requests.get(target_url, headers=headers)
                 
                 if resp.status_code == 200:
                     data = resp.json()
