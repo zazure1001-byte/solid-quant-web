@@ -37,6 +37,16 @@ except: default_c_limit = 7
 try: default_tp_rate = float(query_params.get("tp_rate", 6.0))
 except: default_tp_rate = 6.0
 
+# 신규 추가된 매수 경계 파라미터
+try: default_buy0 = float(query_params.get("buy0", 5.0))
+except: default_buy0 = 5.0
+
+try: default_buy1 = float(query_params.get("buy1", -1.0))
+except: default_buy1 = -1.0
+
+try: default_buy2 = float(query_params.get("buy2", -10.0))
+except: default_buy2 = -10.0
+
 # 1. 기본 설정 및 입출금 기록
 with st.expander("📝 1. 기본 설정 및 입출금 기록 (터치하여 열기)", expanded=True):
     col1, col2 = st.columns(2)
@@ -76,15 +86,21 @@ with st.expander("⚙️ 2. 하이브리드 전략 파라미터 설정 (고급)"
     p_col1, p_col2 = st.columns(2)
     with p_col1:
         ui_x_frac = st.number_input("초기 진입 비중 (%)", value=default_x_frac, step=1.0, help="Main 전략의 첫 진입 자산 비중")
-        ui_c_limit = st.number_input("추가 매수 횟수 (회)", value=default_c_limit, step=1, help="Main 전략의 최대 물타기 허용 횟수")
-    with p_col2:
         ui_k_frac = st.number_input("추가 매수 비중 (%)", value=default_k_frac, step=0.5, help="투입된 자금 대비 1회 물타기 비중")
+        ui_c_limit = st.number_input("추가 매수 횟수 (회)", value=default_c_limit, step=1, help="Main 전략의 최대 물타기 허용 횟수")
         ui_tp_rate = st.number_input("익절율 (%)", value=default_tp_rate, step=0.5, help="마지막 매수 체결가 대비 목표 수익률")
+    with p_col2:
+        ui_buy0 = st.number_input("매수0 경계 (%)", value=default_buy0, step=0.5, help="첫 진입 시 전일 종가 대비 LOC 위치 (기본 5%)")
+        ui_buy1 = st.number_input("매수1 경계 (%)", value=default_buy1, step=0.5, help="1차 물타기 시 전일 종가 대비 LOC 위치 (기본 -1%)")
+        ui_buy2 = st.number_input("매수2 경계 (%)", value=default_buy2, step=0.5, help="2차 물타기 시 전일 종가 대비 LOC 위치 (기본 -10%)")
         
     st.query_params["x_frac"] = ui_x_frac
     st.query_params["k_frac"] = ui_k_frac
     st.query_params["c_limit"] = ui_c_limit
     st.query_params["tp_rate"] = ui_tp_rate
+    st.query_params["buy0"] = ui_buy0
+    st.query_params["buy1"] = ui_buy1
+    st.query_params["buy2"] = ui_buy2
 
 run_button = st.button("🚀 매매표 생성 및 백테스트 실행", type="primary", use_container_width=True)
 
@@ -190,13 +206,15 @@ if run_button:
                 C_LIMIT = int(ui_c_limit)        
                 TP_RATE = ui_tp_rate / 100.0     
                 
+                BUY0_MARGIN = ui_buy0 / 100.0
+                BUY1_MARGIN = ui_buy1 / 100.0
+                BUY2_MARGIN = ui_buy2 / 100.0
+                
                 # 기존 고정값 (RSI 및 기타 설정 보존)
                 EXH_TP = 0.03      
                 SLIPPAGE = 0.0     
                 RSI_FRAC = 0.30    
                 MAX_HOLD_DAYS = 24
-                DROP_BUY_RATE_1 = 0.010
-                DROP_BUY_RATE_2 = 0.100
                 
                 flows_dict = {}
                 for f in st.session_state['capital_flows']:
@@ -313,7 +331,7 @@ if run_button:
 
                     if not sell_main:
                         if main_shares == 0:
-                            loc_limit_price = prev_soxl * 1.05
+                            loc_limit_price = prev_soxl * (1 + BUY0_MARGIN)
                             if curr_soxl <= loc_limit_price:
                                 cycle_base_equity = total_equity
                                 latest_rsi_budget = total_equity * RSI_FRAC
@@ -334,8 +352,8 @@ if run_button:
                                     main_holding_days, main_add_buy_count = 0, 0
                         else:
                             if main_add_buy_count < C_LIMIT:
-                                loc_lim_1 = prev_soxl * (1 - DROP_BUY_RATE_1)
-                                loc_lim_2 = prev_soxl * (1 - DROP_BUY_RATE_2)
+                                loc_lim_1 = prev_soxl * (1 + BUY1_MARGIN)
+                                loc_lim_2 = prev_soxl * (1 + BUY2_MARGIN)
                                 tgt = main_cycle_invested * K_FRAC
                                 
                                 actual_ep = curr_soxl * (1 + SLIPPAGE)
@@ -568,7 +586,7 @@ if run_button:
                         
                         # 2) Main 매수 계산
                         if main_shares == 0:
-                            buy_price = last_soxl_close * 1.05
+                            buy_price = last_soxl_close * (1 + BUY0_MARGIN)
                             if buy_price > 0:
                                 buy_qty = round(disp_init / buy_price)
                                 if buy_qty * buy_price > current_cash: 
@@ -582,8 +600,8 @@ if run_button:
                                     buy_summary.append((round(buy_price, 2), buy_qty))
                         else:
                             if main_add_buy_count < C_LIMIT:
-                                buy_price_1 = last_soxl_close * (1 - DROP_BUY_RATE_1)
-                                buy_price_2 = last_soxl_close * (1 - DROP_BUY_RATE_2)
+                                buy_price_1 = last_soxl_close * (1 + BUY1_MARGIN)
+                                buy_price_2 = last_soxl_close * (1 + BUY2_MARGIN)
                                 tgt_amt = main_cycle_invested * K_FRAC
                                 
                                 qty_1 = 0
