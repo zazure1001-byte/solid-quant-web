@@ -197,9 +197,9 @@ def color_profit(val):
     try:
         num = float(str(val).replace('%', '').replace(',', '').replace('$', ''))
         if num > 0:
-            return 'color: #E74C3C; font-weight: bold;' # 붉은색
+            return 'color: #E74C3C; font-weight: bold;'
         elif num < 0:
-            return 'color: #3498DB; font-weight: bold;' # 푸른색
+            return 'color: #3498DB; font-weight: bold;'
     except:
         pass
     return ''
@@ -278,7 +278,6 @@ if run_button:
                 current_year = -1
                 year_max_equity = INIT_CASH
                 
-                # 승률 계산용 카운터
                 trade_count_main, trade_count_rsi = 0, 0
                 main_win_count, main_loss_count = 0, 0
                 rsi_win_count, rsi_loss_count = 0, 0
@@ -352,7 +351,6 @@ if run_button:
                         cash += sell_amount
                         trade_count_main += 1
                         
-                        # 승률(익절/손절) 기록
                         if profit > 0:
                             main_win_count += 1
                         else:
@@ -375,7 +373,6 @@ if run_button:
                         cash += sell_amount
                         trade_count_rsi += 1
                         
-                        # 승률(익절/손절) 기록
                         if profit > 0:
                             rsi_win_count += 1
                         else:
@@ -530,7 +527,6 @@ if run_button:
                 else:
                     df_records = pd.DataFrame(daily_records)
                     
-                    # 탭 3개로 분할 적용
                     tab1, tab2, tab3 = st.tabs(["📊 백테스트 및 누적 매매 일지", "🛒 오늘의 실전 LOC 매매표", "📅 연도별/월별 상세 성과"])
                     
                     # ----------------------------------------
@@ -542,7 +538,7 @@ if run_button:
                         years = len(df_records) / 252 if len(df_records) > 252 else max(len(df_records) / 252, 0.1)
                         cagr = ((final_asset / total_net_investment) ** (1/years) - 1) * 100 if years > 0 and total_net_investment > 0 else 0
                         mdd = df_records['DD (%)'].min()
-                        win_rate = (main_win_count / trade_count_main * 100) if trade_count_main > 0 else 0
+                        win_rate = (main_win_count / (main_win_count + main_loss_count) * 100) if (main_win_count + main_loss_count) > 0 else 0
                         
                         st.subheader("2. 현재 계좌 요약 (핵심 보드)")
                         c1, c2, c3, c4 = st.columns(4)
@@ -577,7 +573,6 @@ if run_button:
                             "입출금", "예수금(Cash)", "총 자산(Equity)"
                         ]
                         format_dict = {col: to_2_decimals for col in cols_to_format}
-                        # 백분율(%) 포맷팅 전용 설정
                         format_dict["자산 손익률 (%)"] = to_pct_2_decimals
                         format_dict["현금 비중 (%)"] = to_pct_2_decimals
                         format_dict["DD (%)"] = to_pct_2_decimals
@@ -748,7 +743,7 @@ if run_button:
                                 st.write("- 매도 주문 없음")
 
                     # ----------------------------------------
-                    # [Tab 3] 연도별/월별 상세 성과 (매트릭스 탭)
+                    # [Tab 3] 연도별/월별 상세 성과 (매트릭스 탭 - 구조 변경 적용)
                     # ----------------------------------------
                     with tab3:
                         st.subheader("📅 연도별/월별 상세 성과 매트릭스")
@@ -759,12 +754,9 @@ if run_button:
                         df_t3['Year'] = df_t3['거래일'].dt.year
                         df_t3['Month'] = df_t3['거래일'].dt.month
                         
-                        # 월간 및 연간 수익률 도출을 위한 Series 생성
                         daily_equity_series = df_t3.set_index('거래일')['총 자산(Equity)']
                         
-                        # 월간 시계열 데이터
                         monthly_end = daily_equity_series.resample('ME').last()
-                        # 초기자금을 첫달 이전으로 간주하여 병합
                         first_day_idx = df_t3['거래일'].iloc[0] - pd.Timedelta(days=1)
                         monthly_equity = pd.concat([pd.Series({first_day_idx: INIT_CASH}), monthly_end])
                         monthly_ret = monthly_equity.pct_change().dropna() * 100
@@ -773,13 +765,11 @@ if run_button:
                         monthly_df['Year'] = monthly_df.index.year
                         monthly_df['Month'] = monthly_df.index.month
                         
-                        # 피벗 테이블 생성 (4구역용)
                         pivot_ret = monthly_df.pivot(index='Year', columns='Month', values='Return')
                         for m in range(1, 13):
                             if m not in pivot_ret.columns: pivot_ret[m] = np.nan
                         pivot_ret = pivot_ret[list(range(1, 13))]
                         
-                        # 연간 통계 산출 (2구역용)
                         yearly_end = daily_equity_series.resample('YE').last()
                         yearly_equity = pd.concat([pd.Series({first_day_idx: INIT_CASH}), yearly_end])
                         yearly_ret = yearly_equity.pct_change().dropna() * 100
@@ -798,7 +788,6 @@ if run_button:
                             })
                         df_yearly = pd.DataFrame(yearly_stats).set_index('연도')
                         
-                        # 전체 통계 연산 (1구역용)
                         ov_mdd_day = df_t3.loc[df_t3['DD (%)'].idxmin(), '거래일'].strftime('%y.%m.%d') if not df_t3.empty else ""
                         ov_avg_mdd = df_yearly['MDD'].mean() if not df_yearly.empty else 0
                         ov_avg_dd = df_t3['DD (%)'].mean()
@@ -806,7 +795,6 @@ if run_button:
                         ov_min_cash = df_t3['현금 비중 (%)'].min()
                         ov_calmar = (cagr / abs(mdd)) if mdd < 0 else 0
                         
-                        # 월간 및 전략 통계 연산 (3구역용)
                         up_months = monthly_ret[monthly_ret > 0]
                         down_months = monthly_ret[monthly_ret < 0]
                         avg_up = up_months.mean() if not up_months.empty else 0
@@ -822,49 +810,66 @@ if run_button:
                         dd_30 = (df_t3['DD (%)'] <= -30.0).mean() * 100
                         dd_40 = (df_t3['DD (%)'] <= -40.0).mean() * 100
 
-                        # 화면 4분할 레이아웃 배치
-                        c_ov, c_yr, c_st, c_mx = st.columns([1, 2, 1.2, 5])
+                        # --- 요청하신 구조 반영 (위에서 아래로 순차 배치) ---
                         
-                        # 1구역: 전체 요약
-                        with c_ov:
-                            summary_data = {
-                                "구분": ["시작일", "종료일", "Calmar", "CAGR", "MDD", "MDD Day", "avg MDD", "avg DD", "avg Cash", "min Cash"],
-                                "수치": [
-                                    start_date.strftime('%y.%m.%d'), end_date.strftime('%y.%m.%d'),
-                                    f"{ov_calmar:.2f}", f"{cagr:.2f}%", f"{mdd:.2f}%", ov_mdd_day,
-                                    f"{ov_avg_mdd:.2f}%", f"{ov_avg_dd:.2f}%", f"{ov_avg_cash:.2f}%", f"{ov_min_cash:.2f}%"
-                                ]
-                            }
-                            st.dataframe(pd.DataFrame(summary_data), hide_index=True)
-                            
-                        # 2구역: 연도별 요약
-                        with c_yr:
-                            st.dataframe(df_yearly.style.format({
-                                '자산': "${:,.0f}", '수익률': "{:.2f}%", 'MDD': "{:.2f}%", 
-                                'avg DD': "{:.2f}%", 'avg Cash': "{:.2f}%"
-                            }).map(color_profit, subset=['수익률']), use_container_width=True)
-                            
-                        # 3구역: 월간 기준 & 전략 승률 (엑셀 블록 디자인 모방)
-                        with c_st:
+                        # 1. 최상단: 전체 요약 지표 가로 배치 (행/열 변환)
+                        st.markdown("##### 📌 전체 성과 요약")
+                        summary_horizontal = {
+                            "시작일": [start_date.strftime('%y.%m.%d')],
+                            "종료일": [end_date.strftime('%y.%m.%d')],
+                            "Calmar": [f"{ov_calmar:.2f}"],
+                            "CAGR": [f"{cagr:.2f}%"],
+                            "MDD": [f"{mdd:.2f}%"],
+                            "MDD Day": [ov_mdd_day],
+                            "avg MDD": [f"{ov_avg_mdd:.2f}%"],
+                            "avg DD": [f"{ov_avg_dd:.2f}%"],
+                            "avg Cash": [f"{ov_avg_cash:.2f}%"],
+                            "min Cash": [f"{ov_min_cash:.2f}%"]
+                        }
+                        st.dataframe(pd.DataFrame(summary_horizontal), hide_index=True, use_container_width=True)
+                        
+                        st.markdown("---")
+
+                        # 2. 그 아래: 연도별 성과
+                        st.markdown("##### 📌 연도별 성과")
+                        st.dataframe(df_yearly.style.format({
+                            '자산': "${:,.0f}", '수익률': "{:.2f}%", 'MDD': "{:.2f}%", 
+                            'avg DD': "{:.2f}%", 'avg Cash': "{:.2f}%"
+                        }).map(color_profit, subset=['수익률']), use_container_width=True)
+                        
+                        st.markdown("---")
+
+                        # 3. 그 아래: 세부 통계 표 3개 가로 나란히 배치
+                        st.markdown("##### 📌 상세 통계 및 전략 분석")
+                        c_stat1, c_stat2, c_stat3 = st.columns(3)
+                        
+                        with c_stat1:
+                            st.markdown("**월간 기준**")
                             df_m_stat = pd.DataFrame({
-                                "월간": ["상승 평균", "하락 평균", "최대 상승", "최대 하락"],
+                                "구분": ["상승 평균", "하락 평균", "최대 상승", "최대 하락"],
                                 "결과": [f"{avg_up:.2f}%", f"{avg_down:.2f}%", f"{max_up:.2f}%", f"{max_down:.2f}%"]
                             })
                             st.dataframe(df_m_stat.style.map(color_profit, subset=['결과']), hide_index=True, use_container_width=True)
                             
+                        with c_stat2:
+                            st.markdown("**전략 승률**")
                             df_win_stat = pd.DataFrame({
-                                "전략": [f"Main 승률", "└ 익절", "└ 손절", f"RSI 승률", "└ 익절", "└ 손절"],
+                                "구분": [f"Main 승률", "└ 익절", "└ 손절", f"RSI 승률", "└ 익절", "└ 손절"],
                                 "결과": [f"{m_win_rate:.2f}%", main_win_count, main_loss_count, f"{r_win_rate:.2f}%", rsi_win_count, rsi_loss_count]
                             })
                             st.dataframe(df_win_stat, hide_index=True, use_container_width=True)
                             
+                        with c_stat3:
+                            st.markdown("**DD 분포**")
                             df_dd_stat = pd.DataFrame({
-                                "DD 분포": ["-10% 이하", "-20% 이하", "-30% 이하", "-40% 이하"],
+                                "구분": ["-10% 이하", "-20% 이하", "-30% 이하", "-40% 이하"],
                                 "비율": [f"{dd_10:.2f}%", f"{dd_20:.2f}%", f"{dd_30:.2f}%", f"{dd_40:.2f}%"]
                             })
                             st.dataframe(df_dd_stat, hide_index=True, use_container_width=True)
 
-                        # 4구역: 월별 수익률 매트릭스
-                        with c_mx:
-                            st.dataframe(pivot_ret.style.format("{:.2f}%", na_rep="")
-                                         .map(color_profit), use_container_width=True)
+                        st.markdown("---")
+
+                        # 4. 맨 아래: 월별 성과 매트릭스
+                        st.markdown("##### 📌 월별 성과 매트릭스 (%)")
+                        st.dataframe(pivot_ret.style.format("{:.2f}%", na_rep="")
+                                     .map(color_profit), use_container_width=True)
