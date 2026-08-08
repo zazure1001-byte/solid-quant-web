@@ -104,18 +104,20 @@ def load_market_data(start, end):
 # --- 데이터프레임 스타일링 함수 ---
 def bg_color_sections(col):
     no_color_cols = ["진행도", "거래일", "SOXL 종가"]
-    orange_cols = [
-        "RSI 수량", "RSI 평단", "RSI 매도일", "RSI 수익금", "RSI 손익률", 
-        "실현손익", "평가손익", "누적 실현 손익", "자산 손익률 (%)", 
-        "입출금"
-    ]
+    green_cols = ["누적 실현 손익", "자산 손익률 (%)"]
+    blue_cols = ["실현손익", "평가손익"]
+    orange_cols = ["RSI 수량", "RSI 평단", "RSI 매도일", "RSI 수익금", "RSI 손익률", "입출금"]
     
     if col.name in no_color_cols:
         return [''] * len(col)
+    elif col.name in green_cols:
+        return ['background-color: rgba(165, 214, 167, 0.4)'] * len(col) # 연두색 (사진 매칭)
+    elif col.name in blue_cols:
+        return ['background-color: rgba(173, 216, 230, 0.3)'] * len(col) # 하늘색 (사진 매칭)
     elif col.name in orange_cols:
-        return ['background-color: rgba(255, 152, 0, 0.15)'] * len(col)
+        return ['background-color: rgba(255, 152, 0, 0.15)'] * len(col) # 어두운 주황색
     else:
-        return ['background-color: rgba(255, 235, 59, 0.15)'] * len(col)
+        return ['background-color: rgba(255, 235, 59, 0.15)'] * len(col) # 노란색
 
 def color_profit(val):
     if val == "":
@@ -513,7 +515,6 @@ if run_button:
                         
                         last_rsi = float(df['SOXX_RSI'].iloc[-1])
                         
-                        # 평단값 포맷팅 보호
                         main_avg_disp = f"${float(last_row['Main 평단']):.2f}" if last_row['Main 평단'] != "" else "$0.00"
                         
                         st.markdown(f"**기준일(마지막 장 마감):** {last_row['거래일']} | **전일 SOXL 종가:** ${last_soxl_close:.2f} | **SOXX RSI:** {last_rsi:.2f}")
