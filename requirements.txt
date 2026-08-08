@@ -4,4 +4,4 @@ pandas
 numpy
 matplotlib
 extra-streamlit-components
-streamlit-local-storage
+requests
