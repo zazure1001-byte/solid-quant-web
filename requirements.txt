@@ -5,3 +5,4 @@ numpy
 matplotlib
 extra-streamlit-components
 requests
+streamlit-local-storage
