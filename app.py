@@ -6,8 +6,9 @@ import math
 import requests
 import json
 from datetime import date, timedelta
+from streamlit_local_storage import LocalStorage
 
-# 💡 회원님의 JSONBin 고유 ID와 마스터 키 탑재!
+# 💡 회원님의 JSONBin 고유 ID와 마스터 키
 JSONBIN_BIN_ID = "6a77338af5f4af5e29fb77be"
 JSONBIN_MASTER_KEY = "$2a$10$Xolq7Pqq7LdAnnev6N0vAeL/zWw/sVnzjgG81iUBc7iz6Fit6wEH6"
 
@@ -23,6 +24,10 @@ st.title("SOLID: Soxl Hybrid Strategy")
 
 # 스크롤 튕김 현상 방지 CSS
 st.markdown("<style>body, .stApp { overscroll-behavior-y: none; }</style>", unsafe_allow_html=True)
+
+# --- 로컬 스토리지 초기화 (아이디 자동 기억용) ---
+localS = LocalStorage()
+saved_last_id = localS.getItem("solid_last_userid") or ""
 
 # --- 세션 상태 초기화 (초기값 세팅) ---
 if 'capital_flows' not in st.session_state:
@@ -41,13 +46,14 @@ for k, v in default_params.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# --- ☁️ 클라우드 설정 동기화 (다중 유저 지원 엔진) ---
+# --- ☁️ 클라우드 설정 동기화 (아이디 기억 + 자동 실행 연동) ---
 st.markdown("### ☁️ 클라우드 설정 동기화")
-st.info("닉네임을 입력하고 설정을 클라우드에 영구 저장하세요. 기기를 바꿔도 언제든 불러올 수 있습니다.")
+st.info("닉네임을 입력하고 설정을 클라우드에 영구 저장하세요. 마지막으로 입력한 닉네임은 자동으로 기억됩니다.")
 
 col_id, col_btn1, col_btn2 = st.columns([2, 1, 1])
 with col_id:
-    user_id = st.text_input("고유 닉네임 (영문/숫자 조합 권장)", placeholder="예: quant_master_01")
+    # 로컬 스토리지에 저장된 닉네임이 있다면 기본값으로 자동 입력
+    user_id = st.text_input("고유 닉네임 (영문/숫자 조합 권장)", value=saved_last_id, placeholder="예: quant_master_01")
     
 with col_btn1:
     st.markdown("<br>", unsafe_allow_html=True)
@@ -55,6 +61,9 @@ with col_btn1:
         if not user_id:
             st.warning("닉네임을 먼저 입력해주세요.")
         else:
+            # 저장할 때 스마트폰 기기에도 이 닉네임을 기억시킴
+            localS.setItem("solid_last_userid", user_id.strip())
+            
             save_data = {
                 "start": st.session_state['start'].strftime("%Y-%m-%d"),
                 "cash": st.session_state['cash'], "slippage": st.session_state['slippage'],
@@ -66,21 +75,15 @@ with col_btn1:
                 "rsi_split": st.session_state['rsi_split'], "rsi_moc": st.session_state['rsi_moc']
             }
             try:
-                # 1. 클라우드에서 현재 전체 데이터를 먼저 불러옴
                 get_resp = requests.get(f"{JSONBIN_URL}/latest", headers=JSONBIN_HEADERS)
-                if get_resp.status_code == 200:
-                    db_data = get_resp.json().get("record", {})
-                else:
-                    db_data = {}
+                db_data = get_resp.json().get("record", {}) if get_resp.status_code == 200 else {}
                 
-                # 2. 내 닉네임 서랍(Key)에 방금 세팅한 값을 집어넣음
                 db_data[user_id.strip()] = save_data
                 
-                # 3. 업데이트된 전체 데이터를 클라우드에 다시 덮어씀 (PUT)
                 put_resp = requests.put(JSONBIN_URL, headers=JSONBIN_HEADERS, json=db_data)
                 
                 if put_resp.status_code == 200:
-                    st.success("✅ 클라우드 저장 완료! 이제 언제든 불러올 수 있습니다.")
+                    st.success("✅ 클라우드 저장 완료!")
                 else:
                     st.error(f"❌ 저장 실패 (서버 응답: {put_resp.status_code})")
             except Exception as e:
@@ -93,7 +96,9 @@ with col_btn2:
             st.warning("닉네임을 먼저 입력해주세요.")
         else:
             try:
-                # 클라우드에서 데이터를 가져와서 내 닉네임이 있는지 확인
+                # 불러올 때도 스마트폰 기기에 닉네임 각인
+                localS.setItem("solid_last_userid", user_id.strip())
+                
                 get_resp = requests.get(f"{JSONBIN_URL}/latest", headers=JSONBIN_HEADERS)
                 
                 if get_resp.status_code == 200:
@@ -117,7 +122,10 @@ with col_btn2:
                         st.session_state['rsi_sell'] = float(data.get("rsi_sell", 25.0))
                         st.session_state['rsi_split'] = int(data.get("rsi_split", 2))
                         st.session_state['rsi_moc'] = int(data.get("rsi_moc", 10))
-                        st.rerun()  # 값 업데이트 후 화면 새로고침
+                        
+                        # 💡 [핵심] 불러오기 성공 시 백테스트 실행 스위치를 강제 ON! (자동 실행)
+                        st.session_state['run_backtest'] = True
+                        st.rerun()
                     else:
                         st.warning("⚠️ 해당 닉네임으로 저장된 설정이 없습니다.")
                 else:
@@ -184,7 +192,7 @@ with st.expander("⚙️ 2. 하이브리드 전략 파라미터 설정 (고급)"
         ui_rsi_sell = st.number_input("RSI 매도 기준", step=1.0, key="rsi_sell")
         ui_rsi_moc = st.number_input("RSI MOC (최대 보유일)", step=1, key="rsi_moc")
 
-# 💡 순수 백테스트 실행 버튼
+# 💡 순수 백테스트 실행 버튼 (수동 클릭 또는 불러오기 시 자동 연동)
 run_button = st.button("🚀 매매표 생성 및 백테스트 실행", type="primary", use_container_width=True)
 
 if run_button:
