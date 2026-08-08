@@ -46,6 +46,10 @@ except: default_buy1 = -1.0
 try: default_buy2 = float(query_params.get("buy2", -10.0))
 except: default_buy2 = -10.0
 
+# 신규 추가된 MOC 파라미터
+try: default_moc = int(query_params.get("moc", 24))
+except: default_moc = 24
+
 # 신규 추가된 RSI 파라미터
 try: default_rsi_buy = float(query_params.get("rsi_buy", 22.0))
 except: default_rsi_buy = 22.0
@@ -55,6 +59,9 @@ except: default_rsi_sell = 25.0
 
 try: default_rsi_split = int(query_params.get("rsi_split", 2))
 except: default_rsi_split = 2
+
+try: default_rsi_moc = int(query_params.get("rsi_moc", 10))
+except: default_rsi_moc = 10
 
 
 # 1. 기본 설정 및 입출금 기록
@@ -104,6 +111,7 @@ with st.expander("⚙️ 2. 하이브리드 전략 파라미터 설정 (고급)"
         ui_buy0 = st.number_input("매수0 경계 (%)", value=default_buy0, step=0.5, help="첫 진입 시 전일 종가 대비 LOC 위치 (기본 5%)")
         ui_buy1 = st.number_input("매수1 경계 (%)", value=default_buy1, step=0.5, help="1차 물타기 시 전일 종가 대비 LOC 위치 (기본 -1%)")
         ui_buy2 = st.number_input("매수2 경계 (%)", value=default_buy2, step=0.5, help="2차 물타기 시 전일 종가 대비 LOC 위치 (기본 -10%)")
+        ui_moc = st.number_input("MOC (최대 보유일)", value=default_moc, step=1, help="Main 전략 진입 후 강제 청산 기한 (기본 24일)")
 
     st.markdown("---")
     st.markdown("##### 📌 RSI 전략 설정")
@@ -113,6 +121,7 @@ with st.expander("⚙️ 2. 하이브리드 전략 파라미터 설정 (고급)"
         ui_rsi_split = st.number_input("RSI 분할 횟수 (회)", value=default_rsi_split, step=1, help="RSI 할당 예산 분할 진입 횟수 (기본 2)")
     with p_col4:
         ui_rsi_sell = st.number_input("RSI 매도 기준", value=default_rsi_sell, step=1.0, help="RSI가 이 수치 이상일 때 익절 (기본 25)")
+        ui_rsi_moc = st.number_input("RSI MOC (최대 보유일)", value=default_rsi_moc, step=1, help="RSI 전략 진입 후 강제 청산 기한 (기본 10일)")
         
     # URL 파라미터 갱신
     st.query_params["x_frac"] = ui_x_frac
@@ -122,9 +131,12 @@ with st.expander("⚙️ 2. 하이브리드 전략 파라미터 설정 (고급)"
     st.query_params["buy0"] = ui_buy0
     st.query_params["buy1"] = ui_buy1
     st.query_params["buy2"] = ui_buy2
+    st.query_params["moc"] = ui_moc
+    
     st.query_params["rsi_buy"] = ui_rsi_buy
     st.query_params["rsi_sell"] = ui_rsi_sell
     st.query_params["rsi_split"] = ui_rsi_split
+    st.query_params["rsi_moc"] = ui_rsi_moc
 
 run_button = st.button("🚀 매매표 생성 및 백테스트 실행", type="primary", use_container_width=True)
 
@@ -233,16 +245,17 @@ if run_button:
                 BUY0_MARGIN = ui_buy0 / 100.0
                 BUY1_MARGIN = ui_buy1 / 100.0
                 BUY2_MARGIN = ui_buy2 / 100.0
+                MOC = int(ui_moc)
                 
                 RSI_BUY = ui_rsi_buy
                 RSI_SELL = ui_rsi_sell
                 RSI_SPLIT = int(ui_rsi_split)
+                RSI_MOC = int(ui_rsi_moc)
                 
                 # 기존 고정값 보존
                 EXH_TP = 0.03      
                 SLIPPAGE = 0.0     
                 RSI_FRAC = 0.30    
-                MAX_HOLD_DAYS = 24
                 
                 flows_dict = {}
                 for f in st.session_state['capital_flows']:
@@ -314,13 +327,14 @@ if run_button:
                         else:
                             sell_limit_tp = main_last_buy_close * (1 + TP_RATE)
                             
-                        if curr_soxl >= sell_limit_tp or main_holding_days >= MAX_HOLD_DAYS:
+                        # 사용자 입력 MOC 적용
+                        if curr_soxl >= sell_limit_tp or main_holding_days >= MOC:
                             sell_main = True
 
                     if rsi_shares > 0:
                         rsi_holding_days += 1
-                        # 사용자 입력 RSI_SELL 적용
-                        if curr_soxx_rsi >= RSI_SELL or rsi_holding_days >= 10:
+                        # 사용자 입력 RSI_SELL 및 RSI_MOC 적용
+                        if curr_soxx_rsi >= RSI_SELL or rsi_holding_days >= RSI_MOC:
                             sell_rsi = True
 
                     if sell_main:
@@ -410,7 +424,6 @@ if run_button:
                                         main_add_buy_count += 1
 
                     if not sell_rsi:
-                        # 사용자 입력 RSI_BUY 및 분할 횟수 적용
                         if curr_soxx_rsi <= RSI_BUY and rsi_buy_count < RSI_SPLIT:
                             if rsi_buy_count == 0: 
                                 if main_shares == 0:
@@ -418,7 +431,6 @@ if run_button:
                                 else:
                                     active_rsi_budget = latest_rsi_budget
                             
-                            # 사용자 입력 RSI_BUY 값에 맞춰 LOC 역산
                             soxx_target_buy = prev_soxx_close + prev_soxx_ema_down - ((100 - RSI_BUY) / RSI_BUY) * prev_soxx_ema_up
                             soxx_pct = (soxx_target_buy - prev_soxx_close) / prev_soxx_close
                             loc_rsi_price = prev_soxl * (1 + 3 * soxx_pct)
@@ -579,7 +591,6 @@ if run_button:
                         last_ema_up = float(df['SOXX_ema_up'].iloc[-1])
                         last_ema_down = float(df['SOXX_ema_down'].iloc[-1])
                         
-                        # 사용자 입력 RSI_BUY/SELL 값을 기반으로 역산
                         soxx_buy_target = last_soxx_close + last_ema_down - ((100 - RSI_BUY) / RSI_BUY) * last_ema_up
                         soxx_buy_pct = (soxx_buy_target - last_soxx_close) / last_soxx_close
                         soxl_rsi_buy_price = last_soxl_close * (1 + 3 * soxx_buy_pct)
@@ -597,7 +608,8 @@ if run_button:
                         col_acc1, col_acc2, col_acc3 = st.columns(3)
                         col_acc1.metric("최종 매수가 (평단)", main_avg_disp)
                         col_acc2.metric("보유 수량", f"{last_row['Main 수량']} 주")
-                        col_acc3.metric("진행 일수 (MOC 24일)", f"{last_row['진행일']} 일")
+                        # 사용자 입력 MOC 값이 동적으로 표시되도록 수정
+                        col_acc3.metric(f"진행 일수 (MOC {MOC}일)", f"{last_row['진행일']} 일")
 
                         order_list = []
                         buy_summary = []
