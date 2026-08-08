@@ -13,14 +13,33 @@ st.title("🛒 실전 매매 대시보드")
 if 'capital_flows' not in st.session_state:
     st.session_state['capital_flows'] = []
 
-# --- 구역 A: 사용자 입력부 ---
+# --- 구역 A: 사용자 입력부 (URL 맞춤형 파라미터 적용) ---
+query_params = st.query_params
+
+# URL에 'start' 값이 있으면 가져오고, 없으면 2025-01-01
+default_start_str = query_params.get("start", "2025-01-01")
+try:
+    default_start = date.fromisoformat(default_start_str)
+except:
+    default_start = date(2025, 1, 1)
+
+# URL에 'cash' 값이 있으면 가져오고, 없으면 100000
+try:
+    default_cash = float(query_params.get("cash", 100000.0))
+except:
+    default_cash = 100000.0
+
 with st.expander("📝 1. 기본 설정 및 입출금 기록 (터치하여 열기)", expanded=True):
     col1, col2 = st.columns(2)
     with col1:
-        start_date = st.date_input("백테스트 시작일", date(2025, 1, 1))
-        INIT_CASH = st.number_input("초기 자본 ($)", min_value=1000.0, value=100000.0, step=1000.0)
+        start_date = st.date_input("백테스트 시작일", default_start)
+        INIT_CASH = st.number_input("초기 자본 ($)", min_value=1000.0, value=default_cash, step=1000.0)
     with col2:
         end_date = st.date_input("오늘(종료일)", date.today())
+        
+    # 사용자가 값을 수정하면 웹 브라우저 URL 주소도 실시간으로 업데이트
+    st.query_params["start"] = start_date.strftime("%Y-%m-%d")
+    st.query_params["cash"] = INIT_CASH
     
     st.markdown("---")
     st.markdown("**💰 추가 입출금 내역 (자본 출입)**")
@@ -186,6 +205,11 @@ if run_button:
 
                     curr_soxl = float(df['SOXL_Close'].iloc[i])
                     prev_soxl = float(df['SOXL_Close'].iloc[i-1]) if i > 0 else curr_soxl
+                    
+                    prev_soxx_ema_up = float(df['SOXX_ema_up'].iloc[i-1]) if i > 0 else float(df['SOXX_ema_up'].iloc[i])
+                    prev_soxx_ema_down = float(df['SOXX_ema_down'].iloc[i-1]) if i > 0 else float(df['SOXX_ema_down'].iloc[i])
+                    prev_soxx_close = float(df['SOXX_Close'].iloc[i-1]) if i > 0 else float(df['SOXX_Close'].iloc[i])
+                    
                     curr_soxx_rsi = float(df['SOXX_RSI'].iloc[i])
                     
                     total_equity = cash + (main_shares + rsi_shares) * curr_soxl
@@ -256,17 +280,20 @@ if run_button:
 
                     if not sell_main:
                         if main_shares == 0:
-                            if curr_soxl <= prev_soxl * 1.05:
+                            loc_limit_price = prev_soxl * 1.05
+                            if curr_soxl <= loc_limit_price:
                                 cycle_base_equity = total_equity
                                 latest_rsi_budget = total_equity * RSI_FRAC
                                 cycle_initial_buy_amt = total_equity * X_FRAC
                                 
-                                ep = curr_soxl * (1 + SLIPPAGE)
-                                buy_qty = round(cycle_initial_buy_amt / ep)
-                                if buy_qty * ep > cash: buy_qty = math.floor(cash / ep)
+                                buy_qty = round(cycle_initial_buy_amt / loc_limit_price)
+                                
+                                actual_ep = curr_soxl * (1 + SLIPPAGE)
+                                if buy_qty * actual_ep > cash: 
+                                    buy_qty = math.floor(cash / actual_ep)
 
                                 if buy_qty > 0:
-                                    cost = buy_qty * ep
+                                    cost = buy_qty * actual_ep
                                     main_shares += buy_qty
                                     cash -= cost
                                     main_cycle_invested = cost
@@ -274,22 +301,33 @@ if run_button:
                                     main_holding_days, main_add_buy_count = 0, 0
                         else:
                             if main_add_buy_count < C_LIMIT:
-                                b_lim_1 = prev_soxl * (1 - DROP_BUY_RATE_1)
-                                b_lim_2 = prev_soxl * (1 - DROP_BUY_RATE_2)
+                                loc_lim_1 = prev_soxl * (1 - DROP_BUY_RATE_1)
+                                loc_lim_2 = prev_soxl * (1 - DROP_BUY_RATE_2)
                                 tgt = main_cycle_invested * K_FRAC
+                                
+                                actual_ep = curr_soxl * (1 + SLIPPAGE)
 
-                                for lim in [b_lim_1, b_lim_2]:
-                                    if curr_soxl <= lim and main_add_buy_count < C_LIMIT:
-                                        ep = curr_soxl * (1 + SLIPPAGE)
-                                        qty = max(0, round(tgt / ep)) # 추가매수도 반올림 적용되어 있음
-                                        if qty * ep > cash: qty = math.floor(cash / ep)
-                                        if qty > 0:
-                                            cost = qty * ep
-                                            main_shares += qty
-                                            cash -= cost
-                                            main_cycle_invested += cost
-                                            main_last_buy_close = curr_soxl
-                                            main_add_buy_count += 1
+                                if curr_soxl <= loc_lim_1 and main_add_buy_count < C_LIMIT:
+                                    qty = round(tgt / loc_lim_1) 
+                                    if qty * actual_ep > cash: qty = math.floor(cash / actual_ep)
+                                    if qty > 0:
+                                        cost = qty * actual_ep
+                                        main_shares += qty
+                                        cash -= cost
+                                        main_cycle_invested += cost
+                                        main_last_buy_close = curr_soxl
+                                        main_add_buy_count += 1
+                                
+                                if curr_soxl <= loc_lim_2 and main_add_buy_count < C_LIMIT:
+                                    qty = round(tgt / loc_lim_2) 
+                                    if qty * actual_ep > cash: qty = math.floor(cash / actual_ep)
+                                    if qty > 0:
+                                        cost = qty * actual_ep
+                                        main_shares += qty
+                                        cash -= cost
+                                        main_cycle_invested += cost
+                                        main_last_buy_close = curr_soxl
+                                        main_add_buy_count += 1
 
                     if not sell_rsi:
                         if curr_soxx_rsi <= 22 and rsi_buy_count < 2:
@@ -298,14 +336,24 @@ if run_button:
                                     active_rsi_budget = total_equity * RSI_FRAC
                                 else:
                                     active_rsi_budget = latest_rsi_budget
+                            
+                            soxx_target_buy = prev_soxx_close + prev_soxx_ema_down - ((100 - 22) / 22) * prev_soxx_ema_up
+                            soxx_pct = (soxx_target_buy - prev_soxx_close) / prev_soxx_close
+                            loc_rsi_price = prev_soxl * (1 + 3 * soxx_pct)
                                     
                             target_rsi_amt = active_rsi_budget / 2
-                            ep = curr_soxl * (1 + SLIPPAGE)
-                            buy_qty = round(target_rsi_amt / ep)
-                            if buy_qty * ep > cash: buy_qty = math.floor(cash / ep)
+                            
+                            if loc_rsi_price > 0:
+                                buy_qty = round(target_rsi_amt / loc_rsi_price)
+                            else:
+                                buy_qty = 0
+                                
+                            actual_ep = curr_soxl * (1 + SLIPPAGE)
+                            if buy_qty * actual_ep > cash: 
+                                buy_qty = math.floor(cash / actual_ep)
 
                             if buy_qty > 0:
-                                cost = buy_qty * ep
+                                cost = buy_qty * actual_ep
                                 rsi_shares += buy_qty
                                 cash -= cost
                                 rsi_invested += cost
@@ -426,7 +474,7 @@ if run_button:
                         st.dataframe(styled_df, use_container_width=True, height=500, hide_index=True, column_order=ordered_columns)
 
                     # ----------------------------------------
-                    # [Tab 2] 실전 LOC 주문표 (반올림 방식 통일)
+                    # [Tab 2] 실전 LOC 주문표
                     # ----------------------------------------
                     with tab2:
                         st.subheader("🚨 오늘 밤 미국 장 LOC 주문표")
@@ -434,7 +482,7 @@ if run_button:
                         last_row = df_records.iloc[-1]
                         last_soxx_close = float(df['SOXX_Close'].iloc[-1])
                         last_soxl_close = float(df['SOXL_Close'].iloc[-1])
-                        current_cash = float(last_row['예수금(Cash)']) # 현재 예수금
+                        current_cash = float(last_row['예수금(Cash)']) 
                         last_total_equity = float(last_row['총 자산(Equity)'])
                         
                         last_ema_up = float(df['SOXX_ema_up'].iloc[-1])
