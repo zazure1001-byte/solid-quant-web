@@ -46,11 +46,9 @@ except: default_buy1 = -1.0
 try: default_buy2 = float(query_params.get("buy2", -10.0))
 except: default_buy2 = -10.0
 
-# 신규 추가된 MOC 파라미터
 try: default_moc = int(query_params.get("moc", 24))
 except: default_moc = 24
 
-# 신규 추가된 RSI 파라미터
 try: default_rsi_buy = float(query_params.get("rsi_buy", 22.0))
 except: default_rsi_buy = 22.0
 
@@ -123,7 +121,6 @@ with st.expander("⚙️ 2. 하이브리드 전략 파라미터 설정 (고급)"
         ui_rsi_sell = st.number_input("RSI 매도 기준", value=default_rsi_sell, step=1.0, help="RSI가 이 수치 이상일 때 익절 (기본 25)")
         ui_rsi_moc = st.number_input("RSI MOC (최대 보유일)", value=default_rsi_moc, step=1, help="RSI 전략 진입 후 강제 청산 기한 (기본 10일)")
         
-    # URL 파라미터 갱신
     st.query_params["x_frac"] = ui_x_frac
     st.query_params["k_frac"] = ui_k_frac
     st.query_params["c_limit"] = ui_c_limit
@@ -195,14 +192,14 @@ def bg_color_sections(col):
         return ['background-color: rgba(255, 235, 59, 0.15)'] * len(col)
 
 def color_profit(val):
-    if val == "":
+    if pd.isna(val) or val == "":
         return ""
     try:
-        num = float(str(val).replace('%', '').replace(',', ''))
+        num = float(str(val).replace('%', '').replace(',', '').replace('$', ''))
         if num > 0:
-            return 'color: #E74C3C; font-weight: bold;'
+            return 'color: #E74C3C; font-weight: bold;' # 붉은색
         elif num < 0:
-            return 'color: #3498DB; font-weight: bold;'
+            return 'color: #3498DB; font-weight: bold;' # 푸른색
     except:
         pass
     return ''
@@ -224,6 +221,11 @@ def to_2_decimals(val):
         return f"{val:.2f}"
     return val
 
+def to_pct_2_decimals(val):
+    if isinstance(val, (int, float)) and not pd.isna(val):
+        return f"{val:.2f}%"
+    return val
+
 # --- 메인 실행 로직 ---
 if run_button:
     if start_date >= end_date:
@@ -236,12 +238,10 @@ if run_button:
             if trade_start_idx >= len(df):
                 st.error("선택한 시작일에 해당하는 시장 데이터가 없습니다. 조금 더 과거 날짜를 포함하거나 휴일 여부를 확인해주세요.")
             else:
-                # 사용자 UI 입력값으로 변수 교체
                 X_FRAC = ui_x_frac / 100.0      
                 K_FRAC = ui_k_frac / 100.0     
                 C_LIMIT = int(ui_c_limit)        
                 TP_RATE = ui_tp_rate / 100.0     
-                
                 BUY0_MARGIN = ui_buy0 / 100.0
                 BUY1_MARGIN = ui_buy1 / 100.0
                 BUY2_MARGIN = ui_buy2 / 100.0
@@ -252,7 +252,6 @@ if run_button:
                 RSI_SPLIT = int(ui_rsi_split)
                 RSI_MOC = int(ui_rsi_moc)
                 
-                # 기존 고정값 보존
                 EXH_TP = 0.03      
                 SLIPPAGE = 0.0     
                 RSI_FRAC = 0.30    
@@ -279,7 +278,11 @@ if run_button:
                 current_year = -1
                 year_max_equity = INIT_CASH
                 
-                trade_count_main, win_count_main, trade_count_rsi = 0, 0, 0
+                # 승률 계산용 카운터
+                trade_count_main, trade_count_rsi = 0, 0
+                main_win_count, main_loss_count = 0, 0
+                rsi_win_count, rsi_loss_count = 0, 0
+                
                 daily_records = []
                 max_equity = INIT_CASH
 
@@ -327,13 +330,11 @@ if run_button:
                         else:
                             sell_limit_tp = main_last_buy_close * (1 + TP_RATE)
                             
-                        # 사용자 입력 MOC 적용
                         if curr_soxl >= sell_limit_tp or main_holding_days >= MOC:
                             sell_main = True
 
                     if rsi_shares > 0:
                         rsi_holding_days += 1
-                        # 사용자 입력 RSI_SELL 및 RSI_MOC 적용
                         if curr_soxx_rsi >= RSI_SELL or rsi_holding_days >= RSI_MOC:
                             sell_rsi = True
 
@@ -350,8 +351,12 @@ if run_button:
                         
                         cash += sell_amount
                         trade_count_main += 1
-                        if sell_amount > main_cycle_invested:
-                            win_count_main += 1
+                        
+                        # 승률(익절/손절) 기록
+                        if profit > 0:
+                            main_win_count += 1
+                        else:
+                            main_loss_count += 1
                             
                         main_shares, main_holding_days, main_cycle_invested = 0, 0, 0.0
                         main_last_buy_close, main_add_buy_count = 0.0, 0
@@ -369,6 +374,13 @@ if run_button:
                         
                         cash += sell_amount
                         trade_count_rsi += 1
+                        
+                        # 승률(익절/손절) 기록
+                        if profit > 0:
+                            rsi_win_count += 1
+                        else:
+                            rsi_loss_count += 1
+                            
                         rsi_shares, rsi_invested, rsi_buy_count, rsi_holding_days = 0, 0.0, 0, 0
                         active_rsi_budget = 0.0
 
@@ -498,7 +510,7 @@ if run_button:
                         "실현손익": disp_realized,
                         "평가손익": unrealized,
                         "누적 실현 손익": cum_realized,
-                        "자산 손익률 (%)": f"{asset_return:.2f}%",
+                        "자산 손익률 (%)": asset_return,
                         "DD (%)": current_dd,
                         "초기 매수금": disp_init,
                         "1회 매수금": disp_1st,
@@ -507,7 +519,7 @@ if run_button:
                         "투자 기준액": disp_base,
                         "진행일": main_holding_days,
                         "YDD (%)": current_ydd,
-                        "현금 비중 (%)": f"{cash_ratio:.2f}%",
+                        "현금 비중 (%)": cash_ratio,
                         "입출금": flow_today if flow_today != 0 else "",
                         "예수금(Cash)": cash,
                         "총 자산(Equity)": final_equity
@@ -518,7 +530,8 @@ if run_button:
                 else:
                     df_records = pd.DataFrame(daily_records)
                     
-                    tab1, tab2 = st.tabs(["📊 백테스트 및 누적 매매 일지", "🛒 오늘의 실전 LOC 매매표"])
+                    # 탭 3개로 분할 적용
+                    tab1, tab2, tab3 = st.tabs(["📊 백테스트 및 누적 매매 일지", "🛒 오늘의 실전 LOC 매매표", "📅 연도별/월별 상세 성과"])
                     
                     # ----------------------------------------
                     # [Tab 1] 기존 백테스트 및 누적 일지
@@ -529,7 +542,7 @@ if run_button:
                         years = len(df_records) / 252 if len(df_records) > 252 else max(len(df_records) / 252, 0.1)
                         cagr = ((final_asset / total_net_investment) ** (1/years) - 1) * 100 if years > 0 and total_net_investment > 0 else 0
                         mdd = df_records['DD (%)'].min()
-                        win_rate = (win_count_main / trade_count_main * 100) if trade_count_main > 0 else 0
+                        win_rate = (main_win_count / trade_count_main * 100) if trade_count_main > 0 else 0
                         
                         st.subheader("2. 현재 계좌 요약 (핵심 보드)")
                         c1, c2, c3, c4 = st.columns(4)
@@ -559,11 +572,16 @@ if run_button:
                         
                         cols_to_format = [
                             "SOXL 종가", "Main 평단", "Main 수익금", "RSI 평단", "RSI 수익금", 
-                            "평가손익", "실현손익", "누적 실현 손익", "DD (%)", "초기 매수금", 
-                            "1회 매수금", "2회 매수금", "RSI 매수금", "투자 기준액", "YDD (%)", 
-                            "현금 비중 (%)", "입출금", "예수금(Cash)", "총 자산(Equity)"
+                            "평가손익", "실현손익", "누적 실현 손익", "초기 매수금", 
+                            "1회 매수금", "2회 매수금", "RSI 매수금", "투자 기준액", 
+                            "입출금", "예수금(Cash)", "총 자산(Equity)"
                         ]
                         format_dict = {col: to_2_decimals for col in cols_to_format}
+                        # 백분율(%) 포맷팅 전용 설정
+                        format_dict["자산 손익률 (%)"] = to_pct_2_decimals
+                        format_dict["현금 비중 (%)"] = to_pct_2_decimals
+                        format_dict["DD (%)"] = to_pct_2_decimals
+                        format_dict["YDD (%)"] = to_pct_2_decimals
                         
                         styled_df = df_records_reversed.style\
                             .apply(bg_color_sections, axis=0)\
@@ -608,14 +626,12 @@ if run_button:
                         col_acc1, col_acc2, col_acc3 = st.columns(3)
                         col_acc1.metric("최종 매수가 (평단)", main_avg_disp)
                         col_acc2.metric("보유 수량", f"{last_row['Main 수량']} 주")
-                        # 사용자 입력 MOC 값이 동적으로 표시되도록 수정
                         col_acc3.metric(f"진행 일수 (MOC {MOC}일)", f"{last_row['진행일']} 일")
 
                         order_list = []
                         buy_summary = []
                         sell_summary = []
                         
-                        # 1) Main 매도 계산
                         if main_shares > 0:
                             if main_add_buy_count >= C_LIMIT:
                                 sell_price = last_soxl_close * (1 + EXH_TP)
@@ -628,7 +644,6 @@ if run_button:
                             })
                             sell_summary.append((round(sell_price, 2), main_shares))
                         
-                        # 2) Main 매수 계산
                         if main_shares == 0:
                             buy_price = last_soxl_close * (1 + BUY0_MARGIN)
                             if buy_price > 0:
@@ -673,7 +688,6 @@ if run_button:
                                     })
                                     buy_summary.append((round(buy_price_2, 2), qty_2))
 
-                        # 3) RSI 매매 계산
                         if rsi_shares > 0:
                             order_list.append({
                                 '구분 (매수/매도)': '매도 (RSI 익절)', '거래방법': 'LOC', 
@@ -732,3 +746,125 @@ if run_button:
                                     st.write(f"💵 **${p:.2f}** | 🛒 **{q} 주**")
                             else:
                                 st.write("- 매도 주문 없음")
+
+                    # ----------------------------------------
+                    # [Tab 3] 연도별/월별 상세 성과 (매트릭스 탭)
+                    # ----------------------------------------
+                    with tab3:
+                        st.subheader("📅 연도별/월별 상세 성과 매트릭스")
+                        
+                        # 데이터 전처리
+                        df_t3 = df_records.copy()
+                        df_t3['거래일'] = pd.to_datetime(df_t3['거래일'])
+                        df_t3['Year'] = df_t3['거래일'].dt.year
+                        df_t3['Month'] = df_t3['거래일'].dt.month
+                        
+                        # 월간 및 연간 수익률 도출을 위한 Series 생성
+                        daily_equity_series = df_t3.set_index('거래일')['총 자산(Equity)']
+                        
+                        # 월간 시계열 데이터
+                        monthly_end = daily_equity_series.resample('ME').last()
+                        # 초기자금을 첫달 이전으로 간주하여 병합
+                        first_day_idx = df_t3['거래일'].iloc[0] - pd.Timedelta(days=1)
+                        monthly_equity = pd.concat([pd.Series({first_day_idx: INIT_CASH}), monthly_end])
+                        monthly_ret = monthly_equity.pct_change().dropna() * 100
+                        
+                        monthly_df = pd.DataFrame({'Return': monthly_ret})
+                        monthly_df['Year'] = monthly_df.index.year
+                        monthly_df['Month'] = monthly_df.index.month
+                        
+                        # 피벗 테이블 생성 (4구역용)
+                        pivot_ret = monthly_df.pivot(index='Year', columns='Month', values='Return')
+                        for m in range(1, 13):
+                            if m not in pivot_ret.columns: pivot_ret[m] = np.nan
+                        pivot_ret = pivot_ret[list(range(1, 13))]
+                        
+                        # 연간 통계 산출 (2구역용)
+                        yearly_end = daily_equity_series.resample('YE').last()
+                        yearly_equity = pd.concat([pd.Series({first_day_idx: INIT_CASH}), yearly_end])
+                        yearly_ret = yearly_equity.pct_change().dropna() * 100
+                        
+                        yearly_stats = []
+                        for y in df_t3['Year'].unique():
+                            y_df = df_t3[df_t3['Year'] == y]
+                            y_mdd = y_df['DD (%)'].min()
+                            y_avg_dd = y_df['DD (%)'].mean()
+                            y_avg_cash = y_df['현금 비중 (%)'].mean()
+                            y_asset = y_df['총 자산(Equity)'].iloc[-1]
+                            y_r = yearly_ret[yearly_ret.index.year == y].iloc[0] if y in yearly_ret.index.year else 0
+                            yearly_stats.append({
+                                '연도': y, '자산': y_asset, '수익률': y_r, 
+                                'MDD': y_mdd, 'avg DD': y_avg_dd, 'avg Cash': y_avg_cash
+                            })
+                        df_yearly = pd.DataFrame(yearly_stats).set_index('연도')
+                        
+                        # 전체 통계 연산 (1구역용)
+                        ov_mdd_day = df_t3.loc[df_t3['DD (%)'].idxmin(), '거래일'].strftime('%y.%m.%d') if not df_t3.empty else ""
+                        ov_avg_mdd = df_yearly['MDD'].mean() if not df_yearly.empty else 0
+                        ov_avg_dd = df_t3['DD (%)'].mean()
+                        ov_avg_cash = df_t3['현금 비중 (%)'].mean()
+                        ov_min_cash = df_t3['현금 비중 (%)'].min()
+                        ov_calmar = (cagr / abs(mdd)) if mdd < 0 else 0
+                        
+                        # 월간 및 전략 통계 연산 (3구역용)
+                        up_months = monthly_ret[monthly_ret > 0]
+                        down_months = monthly_ret[monthly_ret < 0]
+                        avg_up = up_months.mean() if not up_months.empty else 0
+                        avg_down = down_months.mean() if not down_months.empty else 0
+                        max_up = monthly_ret.max() if not monthly_ret.empty else 0
+                        max_down = monthly_ret.min() if not monthly_ret.empty else 0
+                        
+                        m_win_rate = (main_win_count / (main_win_count + main_loss_count) * 100) if (main_win_count + main_loss_count) > 0 else 0
+                        r_win_rate = (rsi_win_count / (rsi_win_count + rsi_loss_count) * 100) if (rsi_win_count + rsi_loss_count) > 0 else 0
+                        
+                        dd_10 = (df_t3['DD (%)'] <= -10.0).mean() * 100
+                        dd_20 = (df_t3['DD (%)'] <= -20.0).mean() * 100
+                        dd_30 = (df_t3['DD (%)'] <= -30.0).mean() * 100
+                        dd_40 = (df_t3['DD (%)'] <= -40.0).mean() * 100
+
+                        # 화면 4분할 레이아웃 배치
+                        c_ov, c_yr, c_st, c_mx = st.columns([1, 2, 1.2, 5])
+                        
+                        # 1구역: 전체 요약
+                        with c_ov:
+                            summary_data = {
+                                "구분": ["시작일", "종료일", "Calmar", "CAGR", "MDD", "MDD Day", "avg MDD", "avg DD", "avg Cash", "min Cash"],
+                                "수치": [
+                                    start_date.strftime('%y.%m.%d'), end_date.strftime('%y.%m.%d'),
+                                    f"{ov_calmar:.2f}", f"{cagr:.2f}%", f"{mdd:.2f}%", ov_mdd_day,
+                                    f"{ov_avg_mdd:.2f}%", f"{ov_avg_dd:.2f}%", f"{ov_avg_cash:.2f}%", f"{ov_min_cash:.2f}%"
+                                ]
+                            }
+                            st.dataframe(pd.DataFrame(summary_data), hide_index=True)
+                            
+                        # 2구역: 연도별 요약
+                        with c_yr:
+                            st.dataframe(df_yearly.style.format({
+                                '자산': "${:,.0f}", '수익률': "{:.2f}%", 'MDD': "{:.2f}%", 
+                                'avg DD': "{:.2f}%", 'avg Cash': "{:.2f}%"
+                            }).map(color_profit, subset=['수익률']), use_container_width=True)
+                            
+                        # 3구역: 월간 기준 & 전략 승률 (엑셀 블록 디자인 모방)
+                        with c_st:
+                            df_m_stat = pd.DataFrame({
+                                "월간": ["상승 평균", "하락 평균", "최대 상승", "최대 하락"],
+                                "결과": [f"{avg_up:.2f}%", f"{avg_down:.2f}%", f"{max_up:.2f}%", f"{max_down:.2f}%"]
+                            })
+                            st.dataframe(df_m_stat.style.map(color_profit, subset=['결과']), hide_index=True, use_container_width=True)
+                            
+                            df_win_stat = pd.DataFrame({
+                                "전략": [f"Main 승률", "└ 익절", "└ 손절", f"RSI 승률", "└ 익절", "└ 손절"],
+                                "결과": [f"{m_win_rate:.2f}%", main_win_count, main_loss_count, f"{r_win_rate:.2f}%", rsi_win_count, rsi_loss_count]
+                            })
+                            st.dataframe(df_win_stat, hide_index=True, use_container_width=True)
+                            
+                            df_dd_stat = pd.DataFrame({
+                                "DD 분포": ["-10% 이하", "-20% 이하", "-30% 이하", "-40% 이하"],
+                                "비율": [f"{dd_10:.2f}%", f"{dd_20:.2f}%", f"{dd_30:.2f}%", f"{dd_40:.2f}%"]
+                            })
+                            st.dataframe(df_dd_stat, hide_index=True, use_container_width=True)
+
+                        # 4구역: 월별 수익률 매트릭스
+                        with c_mx:
+                            st.dataframe(pivot_ret.style.format("{:.2f}%", na_rep="")
+                                         .map(color_profit), use_container_width=True)
