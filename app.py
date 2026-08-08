@@ -7,7 +7,7 @@ from datetime import date, timedelta
 
 # --- 페이지 기본 설정 (모바일 최적화) ---
 st.set_page_config(page_title="Solid Quant Dashboard", layout="wide", initial_sidebar_state="collapsed")
-st.title("SOLID")
+st.title("SOLID: Soxl Hybrid Strategy")
 
 # --- 세션 상태 초기화 (자본 출입 기록용) ---
 if 'capital_flows' not in st.session_state:
