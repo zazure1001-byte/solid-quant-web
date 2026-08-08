@@ -6,7 +6,7 @@ import math
 from datetime import date, timedelta
 
 # --- 페이지 기본 설정 (모바일 최적화) ---
-st.set_page_config(page_title="Solid Quant Dashboard", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="SOLID: Soxl Hybrid Strategy", layout="wide", initial_sidebar_state="collapsed")
 st.title("SOLID: Soxl Hybrid Strategy")
 
 # --- 세션 상태 초기화 (자본 출입 기록용) ---
@@ -16,19 +16,28 @@ if 'capital_flows' not in st.session_state:
 # --- 구역 A: 사용자 입력부 (URL 맞춤형 파라미터 적용) ---
 query_params = st.query_params
 
-# URL에 'start' 값이 있으면 가져오고, 없으면 2025-01-01
+# URL 기존 설정값 불러오기
 default_start_str = query_params.get("start", "2025-01-01")
-try:
-    default_start = date.fromisoformat(default_start_str)
-except:
-    default_start = date(2025, 1, 1)
+try: default_start = date.fromisoformat(default_start_str)
+except: default_start = date(2025, 1, 1)
 
-# URL에 'cash' 값이 있으면 가져오고, 없으면 100000
-try:
-    default_cash = float(query_params.get("cash", 100000.0))
-except:
-    default_cash = 100000.0
+try: default_cash = float(query_params.get("cash", 100000.0))
+except: default_cash = 100000.0
 
+# 전략 파라미터 URL 불러오기
+try: default_x_frac = float(query_params.get("x_frac", 35.0))
+except: default_x_frac = 35.0
+
+try: default_k_frac = float(query_params.get("k_frac", 12.5))
+except: default_k_frac = 12.5
+
+try: default_c_limit = int(query_params.get("c_limit", 7))
+except: default_c_limit = 7
+
+try: default_tp_rate = float(query_params.get("tp_rate", 6.0))
+except: default_tp_rate = 6.0
+
+# 1. 기본 설정 및 입출금 기록
 with st.expander("📝 1. 기본 설정 및 입출금 기록 (터치하여 열기)", expanded=True):
     col1, col2 = st.columns(2)
     with col1:
@@ -37,7 +46,6 @@ with st.expander("📝 1. 기본 설정 및 입출금 기록 (터치하여 열�
     with col2:
         end_date = st.date_input("오늘(종료일)", date.today())
         
-    # 사용자가 값을 수정하면 웹 브라우저 URL 주소도 실시간으로 업데이트
     st.query_params["start"] = start_date.strftime("%Y-%m-%d")
     st.query_params["cash"] = INIT_CASH
     
@@ -62,6 +70,21 @@ with st.expander("📝 1. 기본 설정 및 입출금 기록 (터치하여 열�
         if st.button("내역 전체 초기화"):
             st.session_state['capital_flows'] = []
             st.rerun()
+
+# 2. 하이브리드 전략 파라미터 설정
+with st.expander("⚙️ 2. 하이브리드 전략 파라미터 설정 (고급)", expanded=False):
+    p_col1, p_col2 = st.columns(2)
+    with p_col1:
+        ui_x_frac = st.number_input("초기 진입 비중 (%)", value=default_x_frac, step=1.0, help="Main 전략의 첫 진입 자산 비중")
+        ui_c_limit = st.number_input("추가 매수 횟수 (회)", value=default_c_limit, step=1, help="Main 전략의 최대 물타기 허용 횟수")
+    with p_col2:
+        ui_k_frac = st.number_input("추가 매수 비중 (%)", value=default_k_frac, step=0.5, help="투입된 자금 대비 1회 물타기 비중")
+        ui_tp_rate = st.number_input("익절율 (%)", value=default_tp_rate, step=0.5, help="마지막 매수 체결가 대비 목표 수익률")
+        
+    st.query_params["x_frac"] = ui_x_frac
+    st.query_params["k_frac"] = ui_k_frac
+    st.query_params["c_limit"] = ui_c_limit
+    st.query_params["tp_rate"] = ui_tp_rate
 
 run_button = st.button("🚀 매매표 생성 및 백테스트 실행", type="primary", use_container_width=True)
 
@@ -111,13 +134,13 @@ def bg_color_sections(col):
     if col.name in no_color_cols:
         return [''] * len(col)
     elif col.name in green_cols:
-        return ['background-color: rgba(165, 214, 167, 0.4)'] * len(col) # 연두색 (사진 매칭)
+        return ['background-color: rgba(165, 214, 167, 0.4)'] * len(col)
     elif col.name in blue_cols:
-        return ['background-color: rgba(173, 216, 230, 0.3)'] * len(col) # 하늘색 (사진 매칭)
+        return ['background-color: rgba(173, 216, 230, 0.3)'] * len(col)
     elif col.name in orange_cols:
-        return ['background-color: rgba(255, 152, 0, 0.15)'] * len(col) # 어두운 주황색
+        return ['background-color: rgba(255, 152, 0, 0.15)'] * len(col)
     else:
-        return ['background-color: rgba(255, 235, 59, 0.15)'] * len(col) # 노란색
+        return ['background-color: rgba(255, 235, 59, 0.15)'] * len(col)
 
 def color_profit(val):
     if val == "":
@@ -144,7 +167,6 @@ def style_order_table(row):
         return ['background-color: rgba(52, 152, 219, 0.2)'] * len(row)
     return [''] * len(row)
 
-# 데이터프레임 소수점 둘째 자리 포맷 함수
 def to_2_decimals(val):
     if isinstance(val, (int, float)) and not pd.isna(val):
         return f"{val:.2f}"
@@ -162,10 +184,13 @@ if run_button:
             if trade_start_idx >= len(df):
                 st.error("선택한 시작일에 해당하는 시장 데이터가 없습니다. 조금 더 과거 날짜를 포함하거나 휴일 여부를 확인해주세요.")
             else:
-                X_FRAC = 0.35      
-                K_FRAC = 0.125     
-                C_LIMIT = 7        
-                TP_RATE = 0.06     
+                # 사용자 UI 입력값으로 변수 교체
+                X_FRAC = ui_x_frac / 100.0      
+                K_FRAC = ui_k_frac / 100.0     
+                C_LIMIT = int(ui_c_limit)        
+                TP_RATE = ui_tp_rate / 100.0     
+                
+                # 기존 고정값 (RSI 및 기타 설정 보존)
                 EXH_TP = 0.03      
                 SLIPPAGE = 0.0     
                 RSI_FRAC = 0.30    
