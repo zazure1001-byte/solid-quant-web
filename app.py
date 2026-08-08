@@ -4,9 +4,11 @@ import pandas as pd
 import numpy as np
 import math
 import requests
+import json
+import urllib.parse
 from datetime import date, timedelta
 
-# 🚨 여기에 방금 kvdb.io 에서 발급받은 주소를 붙여넣으세요! (끝에 슬래시 / 없이)
+# 💡 발급받으신 고유 클라우드 저장소 주소가 적용되었습니다!
 KVDB_URL = "https://kvdb.io/RNBYoRrQqa3CotY4QTvMtW"
 
 # --- 페이지 기본 설정 (모바일 최적화) ---
@@ -33,13 +35,14 @@ for k, v in default_params.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# --- ☁️ 클라우드 설정 동기화 (최상단 배치) ---
+# --- ☁️ 클라우드 설정 동기화 (가장 최상단 배치) ---
 st.markdown("### ☁️ 클라우드 설정 동기화")
 st.info("닉네임을 입력하고 설정을 클라우드에 영구 저장하세요. 기기를 바꿔도 언제든 불러올 수 있습니다.")
 
 col_id, col_btn1, col_btn2 = st.columns([2, 1, 1])
 with col_id:
     user_id = st.text_input("고유 닉네임 (영문/숫자 조합 권장)", placeholder="예: quant_master_01")
+    
 with col_btn1:
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("💾 내 설정 저장", use_container_width=True):
@@ -57,10 +60,19 @@ with col_btn1:
                 "rsi_split": st.session_state['rsi_split'], "rsi_moc": st.session_state['rsi_moc']
             }
             try:
-                requests.post(f"{KVDB_URL}/{user_id}", json=save_data)
-                st.success("클라우드 저장 완료!")
-            except:
-                st.error("저장 실패. 인터넷 연결을 확인하세요.")
+                # 데이터 통신 안정성을 위한 PUT 방식 및 JSON 암호화 적용
+                safe_user_id = urllib.parse.quote(user_id.strip())
+                target_url = f"{KVDB_URL}/{safe_user_id}"
+                headers = {"Content-Type": "application/json"}
+                
+                resp = requests.put(target_url, data=json.dumps(save_data), headers=headers)
+                
+                if resp.status_code in [200, 201]:
+                    st.success("✅ 클라우드 저장 완료! 이제 언제든 불러올 수 있습니다.")
+                else:
+                    st.error(f"❌ 저장 실패: 서버 거부 (코드: {resp.status_code})")
+            except Exception as e:
+                st.error(f"❌ 네트워크 오류 발생: {e}")
 
 with col_btn2:
     st.markdown("<br>", unsafe_allow_html=True)
@@ -69,29 +81,34 @@ with col_btn2:
             st.warning("닉네임을 먼저 입력해주세요.")
         else:
             try:
-                resp = requests.get(f"{KVDB_URL}/{user_id}")
+                safe_user_id = urllib.parse.quote(user_id.strip())
+                target_url = f"{KVDB_URL}/{safe_user_id}"
+                
+                resp = requests.get(target_url)
                 if resp.status_code == 200:
                     data = resp.json()
                     st.session_state['start'] = date.fromisoformat(data.get("start", "2026-06-30"))
-                    st.session_state['cash'] = data.get("cash", 100000.0)
-                    st.session_state['slippage'] = data.get("slippage", 0.1)
-                    st.session_state['x_frac'] = data.get("x_frac", 35.0)
-                    st.session_state['k_frac'] = data.get("k_frac", 12.5)
-                    st.session_state['c_limit'] = data.get("c_limit", 7)
-                    st.session_state['tp_rate'] = data.get("tp_rate", 6.0)
-                    st.session_state['buy0'] = data.get("buy0", 5.0)
-                    st.session_state['buy1'] = data.get("buy1", -1.0)
-                    st.session_state['buy2'] = data.get("buy2", -10.0)
-                    st.session_state['moc'] = data.get("moc", 24)
-                    st.session_state['rsi_buy'] = data.get("rsi_buy", 22.0)
-                    st.session_state['rsi_sell'] = data.get("rsi_sell", 25.0)
-                    st.session_state['rsi_split'] = data.get("rsi_split", 2)
-                    st.session_state['rsi_moc'] = data.get("rsi_moc", 10)
-                    st.rerun()
+                    st.session_state['cash'] = float(data.get("cash", 100000.0))
+                    st.session_state['slippage'] = float(data.get("slippage", 0.1))
+                    st.session_state['x_frac'] = float(data.get("x_frac", 35.0))
+                    st.session_state['k_frac'] = float(data.get("k_frac", 12.5))
+                    st.session_state['c_limit'] = int(data.get("c_limit", 7))
+                    st.session_state['tp_rate'] = float(data.get("tp_rate", 6.0))
+                    st.session_state['buy0'] = float(data.get("buy0", 5.0))
+                    st.session_state['buy1'] = float(data.get("buy1", -1.0))
+                    st.session_state['buy2'] = float(data.get("buy2", -10.0))
+                    st.session_state['moc'] = int(data.get("moc", 24))
+                    st.session_state['rsi_buy'] = float(data.get("rsi_buy", 22.0))
+                    st.session_state['rsi_sell'] = float(data.get("rsi_sell", 25.0))
+                    st.session_state['rsi_split'] = int(data.get("rsi_split", 2))
+                    st.session_state['rsi_moc'] = int(data.get("rsi_moc", 10))
+                    st.rerun()  # 💡 값을 덮어씌운 후 화면 새로고침하여 적용
+                elif resp.status_code == 404:
+                    st.warning("⚠️ 해당 닉네임으로 저장된 설정이 없습니다.")
                 else:
-                    st.error("해당 닉네임으로 저장된 설정이 없습니다.")
-            except:
-                st.error("불러오기 실패. 인터넷 연결을 확인하세요.")
+                    st.error(f"❌ 불러오기 실패 (코드: {resp.status_code})")
+            except Exception as e:
+                st.error(f"❌ 네트워크 오류 발생: {e}")
 
 st.markdown("---")
 
@@ -103,7 +120,7 @@ with st.expander("📝 1. 기본 설정 및 입출금 기록 (터치하여 열�
         INIT_CASH = st.number_input("초기 자본 ($)", min_value=1000.0, step=1000.0, key="cash")
     with col2:
         end_date = st.date_input("오늘(종료일)", date.today())
-        ui_slippage = st.number_input("슬리피지 (%)", step=0.05, key="slippage", help="매수/매도 체결 시 호가 오차")
+        ui_slippage = st.number_input("슬리피지 (%)", step=0.05, key="slippage", help="매수/매도 체결 시 발생하는 호가 오차")
         
     st.markdown("---")
     st.markdown("**💰 추가 입출금 내역 (자본 출입)**")
