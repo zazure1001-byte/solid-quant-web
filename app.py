@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import math
 from datetime import date, timedelta
+import extra_streamlit_components as stx
 
 # --- 페이지 기본 설정 (모바일 최적화) ---
 st.set_page_config(page_title="SOLID: Soxl Hybrid Strategy", layout="wide", initial_sidebar_state="collapsed")
@@ -13,54 +14,43 @@ st.title("SOLID: Soxl Hybrid Strategy")
 if 'capital_flows' not in st.session_state:
     st.session_state['capital_flows'] = []
 
-# --- 구역 A: 사용자 입력부 (URL 맞춤형 파라미터 적용) ---
-query_params = st.query_params
+# --- 쿠키 매니저 초기화 (스마트폰 로컬 저장소) ---
+cookie_manager = stx.CookieManager()
 
-default_start_str = query_params.get("start", "2025-01-01")
-try: default_start = date.fromisoformat(default_start_str)
-except: default_start = date(2025, 1, 1)
+# 저장된 파라미터를 불러오는 헬퍼 함수 (우선순위: 1. URL 2. 쿠키 3. 기본값)
+def get_param(param_name, default_val, cast_type):
+    # 1. URL 파라미터 확인
+    val = st.query_params.get(param_name)
+    if val is not None:
+        try: return cast_type(val)
+        except: pass
+    # 2. 스마트폰 쿠키 확인 (앱 재실행 시 불러옴)
+    val = cookie_manager.get(cookie=param_name)
+    if val is not None:
+        try: return cast_type(val)
+        except: pass
+    # 3. 기본값 반환
+    return default_val
 
-try: default_cash = float(query_params.get("cash", 100000.0))
-except: default_cash = 100000.0
+# --- 초기 파라미터 세팅 (저장된 값 불러오기) ---
+default_start = get_param("start", date(2026, 6, 30), lambda x: date.fromisoformat(x))
+default_cash = get_param("cash", 100000.0, float)
+default_slippage = get_param("slippage", 0.1, float)
 
-try: default_slippage = float(query_params.get("slippage", 0.1))
-except: default_slippage = 0.1
+default_x_frac = get_param("x_frac", 35.0, float)
+default_k_frac = get_param("k_frac", 12.5, float)
+default_c_limit = get_param("c_limit", 7, int)
+default_tp_rate = get_param("tp_rate", 6.0, float)
 
-try: default_x_frac = float(query_params.get("x_frac", 35.0))
-except: default_x_frac = 35.0
+default_buy0 = get_param("buy0", 5.0, float)
+default_buy1 = get_param("buy1", -1.0, float)
+default_buy2 = get_param("buy2", -10.0, float)
+default_moc = get_param("moc", 24, int)
 
-try: default_k_frac = float(query_params.get("k_frac", 12.5))
-except: default_k_frac = 12.5
-
-try: default_c_limit = int(query_params.get("c_limit", 7))
-except: default_c_limit = 7
-
-try: default_tp_rate = float(query_params.get("tp_rate", 6.0))
-except: default_tp_rate = 6.0
-
-try: default_buy0 = float(query_params.get("buy0", 5.0))
-except: default_buy0 = 5.0
-
-try: default_buy1 = float(query_params.get("buy1", -1.0))
-except: default_buy1 = -1.0
-
-try: default_buy2 = float(query_params.get("buy2", -10.0))
-except: default_buy2 = -10.0
-
-try: default_moc = int(query_params.get("moc", 24))
-except: default_moc = 24
-
-try: default_rsi_buy = float(query_params.get("rsi_buy", 22.0))
-except: default_rsi_buy = 22.0
-
-try: default_rsi_sell = float(query_params.get("rsi_sell", 25.0))
-except: default_rsi_sell = 25.0
-
-try: default_rsi_split = int(query_params.get("rsi_split", 2))
-except: default_rsi_split = 2
-
-try: default_rsi_moc = int(query_params.get("rsi_moc", 10))
-except: default_rsi_moc = 10
+default_rsi_buy = get_param("rsi_buy", 22.0, float)
+default_rsi_sell = get_param("rsi_sell", 25.0, float)
+default_rsi_split = get_param("rsi_split", 2, int)
+default_rsi_moc = get_param("rsi_moc", 10, int)
 
 
 # 1. 기본 설정 및 입출금 기록
@@ -234,6 +224,23 @@ def to_pct_2_decimals(val):
 
 # --- 메인 실행 로직 ---
 if run_button:
+    # 💡 [중요] 버튼 클릭 시 현재 파라미터들을 스마트폰 기기 쿠키에 영구 저장합니다.
+    cookie_manager.set("start", start_date.strftime("%Y-%m-%d"))
+    cookie_manager.set("cash", str(INIT_CASH))
+    cookie_manager.set("slippage", str(ui_slippage))
+    cookie_manager.set("x_frac", str(ui_x_frac))
+    cookie_manager.set("k_frac", str(ui_k_frac))
+    cookie_manager.set("c_limit", str(ui_c_limit))
+    cookie_manager.set("tp_rate", str(ui_tp_rate))
+    cookie_manager.set("buy0", str(ui_buy0))
+    cookie_manager.set("buy1", str(ui_buy1))
+    cookie_manager.set("buy2", str(ui_buy2))
+    cookie_manager.set("moc", str(ui_moc))
+    cookie_manager.set("rsi_buy", str(ui_rsi_buy))
+    cookie_manager.set("rsi_sell", str(ui_rsi_sell))
+    cookie_manager.set("rsi_split", str(ui_rsi_split))
+    cookie_manager.set("rsi_moc", str(ui_rsi_moc))
+
     if start_date >= end_date:
         st.error("종료일이 시작일보다 빠를 수 없습니다.")
     else:
@@ -672,7 +679,6 @@ if run_button:
                         if main_shares == 0:
                             buy_price = last_soxl_close * (1 + BUY0_MARGIN)
                             if buy_price > 0:
-                                # 💡 슬리피지 수량 보정
                                 actual_est_ep = buy_price * (1 + SLIPPAGE)
                                 buy_qty = round(disp_init / actual_est_ep)
                                 if buy_qty * actual_est_ep > current_cash: 
@@ -692,7 +698,6 @@ if run_button:
                                 
                                 qty_1 = 0
                                 if buy_price_1 > 0:
-                                    # 💡 슬리피지 수량 보정
                                     actual_est_ep_1 = buy_price_1 * (1 + SLIPPAGE)
                                     qty_1 = round(tgt_amt / actual_est_ep_1)
                                     if qty_1 * actual_est_ep_1 > current_cash: 
@@ -700,7 +705,6 @@ if run_button:
                                         
                                 qty_2 = 0
                                 if buy_price_2 > 0:
-                                    # 💡 슬리피지 수량 보정
                                     actual_est_ep_2 = buy_price_2 * (1 + SLIPPAGE)
                                     qty_2 = round(tgt_amt / actual_est_ep_2)
                                     if qty_2 * actual_est_ep_2 > current_cash:
@@ -735,7 +739,6 @@ if run_button:
                             rsi_target_amt = current_rsi_budget / RSI_SPLIT if RSI_SPLIT > 0 else 0
                             
                             if soxl_rsi_buy_price > 0:
-                                # 💡 슬리피지 수량 보정
                                 actual_est_ep_rsi = soxl_rsi_buy_price * (1 + SLIPPAGE)
                                 rsi_qty = round(rsi_target_amt / actual_est_ep_rsi)
                                 if rsi_qty * actual_est_ep_rsi > current_cash:
