@@ -37,7 +37,6 @@ except: default_c_limit = 7
 try: default_tp_rate = float(query_params.get("tp_rate", 6.0))
 except: default_tp_rate = 6.0
 
-# 신규 추가된 매수 경계 파라미터
 try: default_buy0 = float(query_params.get("buy0", 5.0))
 except: default_buy0 = 5.0
 
@@ -46,6 +45,17 @@ except: default_buy1 = -1.0
 
 try: default_buy2 = float(query_params.get("buy2", -10.0))
 except: default_buy2 = -10.0
+
+# 신규 추가된 RSI 파라미터
+try: default_rsi_buy = float(query_params.get("rsi_buy", 22.0))
+except: default_rsi_buy = 22.0
+
+try: default_rsi_sell = float(query_params.get("rsi_sell", 25.0))
+except: default_rsi_sell = 25.0
+
+try: default_rsi_split = int(query_params.get("rsi_split", 2))
+except: default_rsi_split = 2
+
 
 # 1. 기본 설정 및 입출금 기록
 with st.expander("📝 1. 기본 설정 및 입출금 기록 (터치하여 열기)", expanded=True):
@@ -83,6 +93,7 @@ with st.expander("📝 1. 기본 설정 및 입출금 기록 (터치하여 열�
 
 # 2. 하이브리드 전략 파라미터 설정
 with st.expander("⚙️ 2. 하이브리드 전략 파라미터 설정 (고급)", expanded=False):
+    st.markdown("##### 📌 Main 전략 설정")
     p_col1, p_col2 = st.columns(2)
     with p_col1:
         ui_x_frac = st.number_input("초기 진입 비중 (%)", value=default_x_frac, step=1.0, help="Main 전략의 첫 진입 자산 비중")
@@ -93,7 +104,17 @@ with st.expander("⚙️ 2. 하이브리드 전략 파라미터 설정 (고급)"
         ui_buy0 = st.number_input("매수0 경계 (%)", value=default_buy0, step=0.5, help="첫 진입 시 전일 종가 대비 LOC 위치 (기본 5%)")
         ui_buy1 = st.number_input("매수1 경계 (%)", value=default_buy1, step=0.5, help="1차 물타기 시 전일 종가 대비 LOC 위치 (기본 -1%)")
         ui_buy2 = st.number_input("매수2 경계 (%)", value=default_buy2, step=0.5, help="2차 물타기 시 전일 종가 대비 LOC 위치 (기본 -10%)")
+
+    st.markdown("---")
+    st.markdown("##### 📌 RSI 전략 설정")
+    p_col3, p_col4 = st.columns(2)
+    with p_col3:
+        ui_rsi_buy = st.number_input("RSI 매수 기준", value=default_rsi_buy, step=1.0, help="RSI가 이 수치 이하일 때 진입 (기본 22)")
+        ui_rsi_split = st.number_input("RSI 분할 횟수 (회)", value=default_rsi_split, step=1, help="RSI 할당 예산 분할 진입 횟수 (기본 2)")
+    with p_col4:
+        ui_rsi_sell = st.number_input("RSI 매도 기준", value=default_rsi_sell, step=1.0, help="RSI가 이 수치 이상일 때 익절 (기본 25)")
         
+    # URL 파라미터 갱신
     st.query_params["x_frac"] = ui_x_frac
     st.query_params["k_frac"] = ui_k_frac
     st.query_params["c_limit"] = ui_c_limit
@@ -101,6 +122,9 @@ with st.expander("⚙️ 2. 하이브리드 전략 파라미터 설정 (고급)"
     st.query_params["buy0"] = ui_buy0
     st.query_params["buy1"] = ui_buy1
     st.query_params["buy2"] = ui_buy2
+    st.query_params["rsi_buy"] = ui_rsi_buy
+    st.query_params["rsi_sell"] = ui_rsi_sell
+    st.query_params["rsi_split"] = ui_rsi_split
 
 run_button = st.button("🚀 매매표 생성 및 백테스트 실행", type="primary", use_container_width=True)
 
@@ -210,7 +234,11 @@ if run_button:
                 BUY1_MARGIN = ui_buy1 / 100.0
                 BUY2_MARGIN = ui_buy2 / 100.0
                 
-                # 기존 고정값 (RSI 및 기타 설정 보존)
+                RSI_BUY = ui_rsi_buy
+                RSI_SELL = ui_rsi_sell
+                RSI_SPLIT = int(ui_rsi_split)
+                
+                # 기존 고정값 보존
                 EXH_TP = 0.03      
                 SLIPPAGE = 0.0     
                 RSI_FRAC = 0.30    
@@ -291,7 +319,8 @@ if run_button:
 
                     if rsi_shares > 0:
                         rsi_holding_days += 1
-                        if curr_soxx_rsi >= 25 or rsi_holding_days >= 10:
+                        # 사용자 입력 RSI_SELL 적용
+                        if curr_soxx_rsi >= RSI_SELL or rsi_holding_days >= 10:
                             sell_rsi = True
 
                     if sell_main:
@@ -381,18 +410,20 @@ if run_button:
                                         main_add_buy_count += 1
 
                     if not sell_rsi:
-                        if curr_soxx_rsi <= 22 and rsi_buy_count < 2:
+                        # 사용자 입력 RSI_BUY 및 분할 횟수 적용
+                        if curr_soxx_rsi <= RSI_BUY and rsi_buy_count < RSI_SPLIT:
                             if rsi_buy_count == 0: 
                                 if main_shares == 0:
                                     active_rsi_budget = total_equity * RSI_FRAC
                                 else:
                                     active_rsi_budget = latest_rsi_budget
                             
-                            soxx_target_buy = prev_soxx_close + prev_soxx_ema_down - ((100 - 22) / 22) * prev_soxx_ema_up
+                            # 사용자 입력 RSI_BUY 값에 맞춰 LOC 역산
+                            soxx_target_buy = prev_soxx_close + prev_soxx_ema_down - ((100 - RSI_BUY) / RSI_BUY) * prev_soxx_ema_up
                             soxx_pct = (soxx_target_buy - prev_soxx_close) / prev_soxx_close
                             loc_rsi_price = prev_soxl * (1 + 3 * soxx_pct)
                                     
-                            target_rsi_amt = active_rsi_budget / 2
+                            target_rsi_amt = active_rsi_budget / RSI_SPLIT if RSI_SPLIT > 0 else 0
                             
                             if loc_rsi_price > 0:
                                 buy_qty = round(target_rsi_amt / loc_rsi_price)
@@ -548,11 +579,12 @@ if run_button:
                         last_ema_up = float(df['SOXX_ema_up'].iloc[-1])
                         last_ema_down = float(df['SOXX_ema_down'].iloc[-1])
                         
-                        soxx_buy_target = last_soxx_close + last_ema_down - ((100 - 22) / 22) * last_ema_up
+                        # 사용자 입력 RSI_BUY/SELL 값을 기반으로 역산
+                        soxx_buy_target = last_soxx_close + last_ema_down - ((100 - RSI_BUY) / RSI_BUY) * last_ema_up
                         soxx_buy_pct = (soxx_buy_target - last_soxx_close) / last_soxx_close
                         soxl_rsi_buy_price = last_soxl_close * (1 + 3 * soxx_buy_pct)
                         
-                        soxx_sell_target = last_soxx_close + (25 / (100 - 25)) * last_ema_down - last_ema_up
+                        soxx_sell_target = last_soxx_close + (RSI_SELL / (100 - RSI_SELL)) * last_ema_down - last_ema_up
                         soxx_sell_pct = (soxx_sell_target - last_soxx_close) / last_soxx_close
                         soxl_rsi_sell_price = last_soxl_close * (1 + 3 * soxx_sell_pct)
                         
@@ -637,13 +669,13 @@ if run_button:
                             })
                             sell_summary.append((round(soxl_rsi_sell_price, 2), rsi_shares))
                             
-                        elif rsi_shares == 0 and rsi_buy_count < 2:
+                        elif rsi_shares == 0 and rsi_buy_count < RSI_SPLIT:
                             if main_shares == 0:
                                 current_rsi_budget = last_total_equity * RSI_FRAC
                             else:
                                 current_rsi_budget = latest_rsi_budget
                             
-                            rsi_target_amt = current_rsi_budget / 2
+                            rsi_target_amt = current_rsi_budget / RSI_SPLIT if RSI_SPLIT > 0 else 0
                             
                             if soxl_rsi_buy_price > 0:
                                 rsi_qty = round(rsi_target_amt / soxl_rsi_buy_price)
