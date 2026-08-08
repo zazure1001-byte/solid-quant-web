@@ -5,21 +5,23 @@ import numpy as np
 import math
 import requests
 import json
-import urllib.parse
 from datetime import date, timedelta
 
-# 💡 회원님의 실제 버킷 ID
-KVDB_BUCKET_ID = "Ac7ERULjDV2o4YyVfVgJdK"  
-KVDB_URL = f"https://kvdb.io/{KVDB_BUCKET_ID}"
+# 💡 회원님의 JSONBin 고유 ID와 마스터 키 탑재!
+JSONBIN_BIN_ID = "6a77338af5f4af5e29fb77be"
+JSONBIN_MASTER_KEY = "$2a$10$Xolq7Pqq7LdAnnev6N0vAeL/zWw/sVnzjgG81iUBc7iz6Fit6wEH6"
 
-# 💡 방화벽 차단을 우회하기 위한 크롬 브라우저 위장 신분증 (User-Agent)
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+JSONBIN_URL = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
+JSONBIN_HEADERS = {
+    "Content-Type": "application/json",
+    "X-Master-Key": JSONBIN_MASTER_KEY
+}
 
 # --- 페이지 기본 설정 (모바일 최적화) ---
 st.set_page_config(page_title="SOLID: Soxl Hybrid Strategy", layout="wide", initial_sidebar_state="collapsed")
 st.title("SOLID: Soxl Hybrid Strategy")
 
-# 스크롤 튕김 현상 방지
+# 스크롤 튕김 현상 방지 CSS
 st.markdown("<style>body, .stApp { overscroll-behavior-y: none; }</style>", unsafe_allow_html=True)
 
 # --- 세션 상태 초기화 (초기값 세팅) ---
@@ -39,7 +41,7 @@ for k, v in default_params.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# --- ☁️ 클라우드 설정 동기화 ---
+# --- ☁️ 클라우드 설정 동기화 (다중 유저 지원 엔진) ---
 st.markdown("### ☁️ 클라우드 설정 동기화")
 st.info("닉네임을 입력하고 설정을 클라우드에 영구 저장하세요. 기기를 바꿔도 언제든 불러올 수 있습니다.")
 
@@ -64,22 +66,23 @@ with col_btn1:
                 "rsi_split": st.session_state['rsi_split'], "rsi_moc": st.session_state['rsi_moc']
             }
             try:
-                safe_user_id = urllib.parse.quote(user_id.strip())
-                target_url = f"{KVDB_URL}/{safe_user_id}"
+                # 1. 클라우드에서 현재 전체 데이터를 먼저 불러옴
+                get_resp = requests.get(f"{JSONBIN_URL}/latest", headers=JSONBIN_HEADERS)
+                if get_resp.status_code == 200:
+                    db_data = get_resp.json().get("record", {})
+                else:
+                    db_data = {}
                 
-                # 💡 User-Agent를 포함시켜 방화벽(403) 우회 통과
-                headers = {
-                    "Content-Type": "application/json",
-                    "User-Agent": USER_AGENT
-                }
+                # 2. 내 닉네임 서랍(Key)에 방금 세팅한 값을 집어넣음
+                db_data[user_id.strip()] = save_data
                 
-                # PUT 대신 조금 더 안전한 POST 방식 사용
-                resp = requests.post(target_url, data=json.dumps(save_data), headers=headers)
+                # 3. 업데이트된 전체 데이터를 클라우드에 다시 덮어씀 (PUT)
+                put_resp = requests.put(JSONBIN_URL, headers=JSONBIN_HEADERS, json=db_data)
                 
-                if resp.status_code in [200, 201]:
+                if put_resp.status_code == 200:
                     st.success("✅ 클라우드 저장 완료! 이제 언제든 불러올 수 있습니다.")
                 else:
-                    st.error(f"❌ 저장 실패 (코드: {resp.status_code})")
+                    st.error(f"❌ 저장 실패 (서버 응답: {put_resp.status_code})")
             except Exception as e:
                 st.error(f"❌ 네트워크 오류 발생: {e}")
 
@@ -90,35 +93,35 @@ with col_btn2:
             st.warning("닉네임을 먼저 입력해주세요.")
         else:
             try:
-                safe_user_id = urllib.parse.quote(user_id.strip())
-                target_url = f"{KVDB_URL}/{safe_user_id}"
+                # 클라우드에서 데이터를 가져와서 내 닉네임이 있는지 확인
+                get_resp = requests.get(f"{JSONBIN_URL}/latest", headers=JSONBIN_HEADERS)
                 
-                # 💡 불러올 때도 브라우저로 위장
-                headers = {"User-Agent": USER_AGENT}
-                resp = requests.get(target_url, headers=headers)
-                
-                if resp.status_code == 200:
-                    data = resp.json()
-                    st.session_state['start'] = date.fromisoformat(data.get("start", "2026-06-30"))
-                    st.session_state['cash'] = float(data.get("cash", 100000.0))
-                    st.session_state['slippage'] = float(data.get("slippage", 0.1))
-                    st.session_state['x_frac'] = float(data.get("x_frac", 35.0))
-                    st.session_state['k_frac'] = float(data.get("k_frac", 12.5))
-                    st.session_state['c_limit'] = int(data.get("c_limit", 7))
-                    st.session_state['tp_rate'] = float(data.get("tp_rate", 6.0))
-                    st.session_state['buy0'] = float(data.get("buy0", 5.0))
-                    st.session_state['buy1'] = float(data.get("buy1", -1.0))
-                    st.session_state['buy2'] = float(data.get("buy2", -10.0))
-                    st.session_state['moc'] = int(data.get("moc", 24))
-                    st.session_state['rsi_buy'] = float(data.get("rsi_buy", 22.0))
-                    st.session_state['rsi_sell'] = float(data.get("rsi_sell", 25.0))
-                    st.session_state['rsi_split'] = int(data.get("rsi_split", 2))
-                    st.session_state['rsi_moc'] = int(data.get("rsi_moc", 10))
-                    st.rerun() 
-                elif resp.status_code == 404:
-                    st.warning("⚠️ 해당 닉네임으로 저장된 설정이 없습니다.")
+                if get_resp.status_code == 200:
+                    db_data = get_resp.json().get("record", {})
+                    target_user = user_id.strip()
+                    
+                    if target_user in db_data:
+                        data = db_data[target_user]
+                        st.session_state['start'] = date.fromisoformat(data.get("start", "2026-06-30"))
+                        st.session_state['cash'] = float(data.get("cash", 100000.0))
+                        st.session_state['slippage'] = float(data.get("slippage", 0.1))
+                        st.session_state['x_frac'] = float(data.get("x_frac", 35.0))
+                        st.session_state['k_frac'] = float(data.get("k_frac", 12.5))
+                        st.session_state['c_limit'] = int(data.get("c_limit", 7))
+                        st.session_state['tp_rate'] = float(data.get("tp_rate", 6.0))
+                        st.session_state['buy0'] = float(data.get("buy0", 5.0))
+                        st.session_state['buy1'] = float(data.get("buy1", -1.0))
+                        st.session_state['buy2'] = float(data.get("buy2", -10.0))
+                        st.session_state['moc'] = int(data.get("moc", 24))
+                        st.session_state['rsi_buy'] = float(data.get("rsi_buy", 22.0))
+                        st.session_state['rsi_sell'] = float(data.get("rsi_sell", 25.0))
+                        st.session_state['rsi_split'] = int(data.get("rsi_split", 2))
+                        st.session_state['rsi_moc'] = int(data.get("rsi_moc", 10))
+                        st.rerun()  # 값 업데이트 후 화면 새로고침
+                    else:
+                        st.warning("⚠️ 해당 닉네임으로 저장된 설정이 없습니다.")
                 else:
-                    st.error(f"❌ 불러오기 실패 (코드: {resp.status_code})")
+                    st.error(f"❌ 불러오기 실패 (서버 응답: {get_resp.status_code})")
             except Exception as e:
                 st.error(f"❌ 네트워크 오류 발생: {e}")
 
