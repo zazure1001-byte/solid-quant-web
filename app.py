@@ -252,7 +252,7 @@ if run_button:
                         cash += sell_amount
                         trade_count_rsi += 1
                         rsi_shares, rsi_invested, rsi_buy_count, rsi_holding_days = 0, 0.0, 0, 0
-                        active_rsi_budget = 0.0 # 매도 시 예산 상태 초기화
+                        active_rsi_budget = 0.0
 
                     if not sell_main:
                         if main_shares == 0:
@@ -281,7 +281,7 @@ if run_button:
                                 for lim in [b_lim_1, b_lim_2]:
                                     if curr_soxl <= lim and main_add_buy_count < C_LIMIT:
                                         ep = curr_soxl * (1 + SLIPPAGE)
-                                        qty = max(0, round(tgt / ep))
+                                        qty = max(0, round(tgt / ep)) # 추가매수도 반올림 적용되어 있음
                                         if qty * ep > cash: qty = math.floor(cash / ep)
                                         if qty > 0:
                                             cost = qty * ep
@@ -294,7 +294,6 @@ if run_button:
                     if not sell_rsi:
                         if curr_soxx_rsi <= 22 and rsi_buy_count < 2:
                             if rsi_buy_count == 0: 
-                                # RSI 첫 진입 시: Main이 대기 중이면 현재 총자산 기준, 아니면 고정된 latest 예산 사용
                                 if main_shares == 0:
                                     active_rsi_budget = total_equity * RSI_FRAC
                                 else:
@@ -427,7 +426,7 @@ if run_button:
                         st.dataframe(styled_df, use_container_width=True, height=500, hide_index=True, column_order=ordered_columns)
 
                     # ----------------------------------------
-                    # [Tab 2] 실전 LOC 주문표 (RSI 예산 버그 픽스)
+                    # [Tab 2] 실전 LOC 주문표 (반올림 방식 통일)
                     # ----------------------------------------
                     with tab2:
                         st.subheader("🚨 오늘 밤 미국 장 LOC 주문표")
@@ -435,6 +434,7 @@ if run_button:
                         last_row = df_records.iloc[-1]
                         last_soxx_close = float(df['SOXX_Close'].iloc[-1])
                         last_soxl_close = float(df['SOXL_Close'].iloc[-1])
+                        current_cash = float(last_row['예수금(Cash)']) # 현재 예수금
                         last_total_equity = float(last_row['총 자산(Equity)'])
                         
                         last_ema_up = float(df['SOXX_ema_up'].iloc[-1])
@@ -474,24 +474,37 @@ if run_button:
                             })
                             sell_summary.append((round(sell_price, 2), main_shares))
                         
-                        # 2) Main 매수 계산
+                        # 2) Main 매수 계산 (반올림 및 현금 초과 방지 적용)
                         if main_shares == 0:
                             buy_price = last_soxl_close * 1.05
-                            buy_qty = math.floor(disp_init / buy_price) if buy_price > 0 else 0
-                            if buy_qty > 0:
-                                order_list.append({
-                                    '구분 (매수/매도)': '매수 (Main 신규)', '거래방법': 'LOC', 
-                                    '가격 ($)': round(buy_price, 2), '수량 (주)': buy_qty
-                                })
-                                buy_summary.append((round(buy_price, 2), buy_qty))
+                            if buy_price > 0:
+                                buy_qty = round(disp_init / buy_price)
+                                if buy_qty * buy_price > current_cash: 
+                                    buy_qty = math.floor(current_cash / buy_price)
+                                
+                                if buy_qty > 0:
+                                    order_list.append({
+                                        '구분 (매수/매도)': '매수 (Main 신규)', '거래방법': 'LOC', 
+                                        '가격 ($)': round(buy_price, 2), '수량 (주)': buy_qty
+                                    })
+                                    buy_summary.append((round(buy_price, 2), buy_qty))
                         else:
                             if main_add_buy_count < C_LIMIT:
                                 buy_price_1 = last_soxl_close * (1 - DROP_BUY_RATE_1)
                                 buy_price_2 = last_soxl_close * (1 - DROP_BUY_RATE_2)
-                                
                                 tgt_amt = main_cycle_invested * K_FRAC
-                                qty_1 = math.floor(tgt_amt / buy_price_1) if buy_price_1 > 0 else 0
-                                qty_2 = math.floor(tgt_amt / buy_price_2) if buy_price_2 > 0 else 0
+                                
+                                qty_1 = 0
+                                if buy_price_1 > 0:
+                                    qty_1 = round(tgt_amt / buy_price_1)
+                                    if qty_1 * buy_price_1 > current_cash: 
+                                        qty_1 = math.floor(current_cash / buy_price_1)
+                                        
+                                qty_2 = 0
+                                if buy_price_2 > 0:
+                                    qty_2 = round(tgt_amt / buy_price_2)
+                                    if qty_2 * buy_price_2 > current_cash:
+                                        qty_2 = math.floor(current_cash / buy_price_2)
                                 
                                 if qty_1 > 0:
                                     order_list.append({
@@ -506,7 +519,7 @@ if run_button:
                                     })
                                     buy_summary.append((round(buy_price_2, 2), qty_2))
 
-                        # 3) RSI 매매 계산 (버그 픽스 완료)
+                        # 3) RSI 매매 계산 (반올림 및 현금 초과 방지 적용)
                         if rsi_shares > 0:
                             order_list.append({
                                 '구분 (매수/매도)': '매도 (RSI 익절)', '거래방법': 'LOC', 
@@ -515,7 +528,6 @@ if run_button:
                             sell_summary.append((round(soxl_rsi_sell_price, 2), rsi_shares))
                             
                         elif rsi_shares == 0 and rsi_buy_count < 2:
-                            # Main이 대기 중이면 현재 총자산 기준 할당, 아니면 기존 고정 할당 사용
                             if main_shares == 0:
                                 current_rsi_budget = last_total_equity * RSI_FRAC
                             else:
@@ -524,7 +536,10 @@ if run_button:
                             rsi_target_amt = current_rsi_budget / 2
                             
                             if soxl_rsi_buy_price > 0:
-                                rsi_qty = math.floor(rsi_target_amt / soxl_rsi_buy_price)
+                                rsi_qty = round(rsi_target_amt / soxl_rsi_buy_price)
+                                if rsi_qty * soxl_rsi_buy_price > current_cash:
+                                    rsi_qty = math.floor(current_cash / soxl_rsi_buy_price)
+                                    
                                 if rsi_qty > 0:
                                     order_list.append({
                                         '구분 (매수/매도)': '매수 (RSI 신규)', '거래방법': 'LOC', 
